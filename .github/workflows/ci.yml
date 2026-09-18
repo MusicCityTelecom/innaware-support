@@ -28,6 +28,8 @@ jobs:
       INNAWARE_TEST_MYSQL_DSN: "root:rootpass@tcp(127.0.0.1:3306)/innaware_support_ci?parseTime=true&loc=UTC&charset=utf8mb4"
     steps:
       - uses: actions/checkout@v4
+      - name: Validate shell scripts
+        run: bash -n deploy/*.sh
       - name: Validate technician console JavaScript
         run: node --check internal/webui/web/app.js
       - uses: actions/setup-go@v5
