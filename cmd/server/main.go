@@ -25,6 +25,14 @@ func main() {
 	}
 	defer store.Close()
 
+	created, err := store.EnsureBootstrapAdmin(context.Background(), cfg.TechUsername, cfg.TechPassword)
+	if err != nil {
+		log.Fatalf("bootstrap administrator: %v", err)
+	}
+	if created {
+		log.Printf("bootstrap administrator %q persisted to MySQL", cfg.TechUsername)
+	}
+
 	handler := app.NewServer(cfg, store).Handler()
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
