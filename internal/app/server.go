@@ -45,7 +45,7 @@ func NewServer(cfg Config, store *Store) *Server {
 		HandshakeTimeout: 10 * time.Second,
 		ReadBufferSize:   64 * 1024,
 		WriteBufferSize:  64 * 1024,
-		CheckOrigin:      s.checkWebSocketOrigin,
+		CheckOrigin:      s.checkOrigin,
 	}
 	s.routes()
 	return s
