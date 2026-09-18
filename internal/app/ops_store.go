@@ -117,11 +117,11 @@ func (s *Store) DashboardMetrics(ctx context.Context) (DashboardMetrics, error) 
 	s.expireOld(ctx)
 	var m DashboardMetrics
 	row := s.db.QueryRowContext(ctx, `SELECT
-		SUM(status IN ('waiting','approved')),
-		SUM(status='connected'),
-		SUM(created_at >= UTC_DATE()),
-		SUM(status='ended' AND ended_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY),
-		SUM(created_at >= UTC_TIMESTAMP() - INTERVAL 30 DAY),
+		COALESCE(SUM(status IN ('waiting','approved')),0),
+		COALESCE(SUM(status='connected'),0),
+		COALESCE(SUM(created_at >= UTC_DATE()),0),
+		COALESCE(SUM(status='ended' AND ended_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY),0),
+		COALESCE(SUM(created_at >= UTC_TIMESTAMP() - INTERVAL 30 DAY),0),
 		COALESCE(AVG(CASE WHEN ended_at IS NOT NULL AND connected_at IS NOT NULL THEN TIMESTAMPDIFF(SECOND, connected_at, ended_at) END),0)
 		FROM support_sessions`)
 	var avgSeconds float64
