@@ -223,16 +223,15 @@ $('exportHistoryButton').addEventListener('click', () => {
 });
 
 async function loadTechnicianFilter() {
-  if (!isAdmin()) return;
   try {
-    const data = await api('/api/admins');
+    const data = await api('/api/technicians');
     const select = $('historyTechnician');
     const selected = select.value;
     select.innerHTML = '<option value="">All technicians</option>';
-    for (const a of data.admins || []) {
+    for (const a of data.technicians || []) {
       const option = document.createElement('option');
       option.value = a.id;
-      option.textContent = a.display_name || a.username;
+      option.textContent = (a.display_name || a.username) + (a.active ? '' : ' (disabled)');
       select.appendChild(option);
     }
     select.value = selected;
