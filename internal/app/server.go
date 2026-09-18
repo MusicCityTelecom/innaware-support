@@ -60,10 +60,19 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/login", s.handleLogin)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/me", s.requireTech(s.handleMe))
+	s.mux.HandleFunc("POST /api/account/password", s.requireTech(s.handleChangeOwnPassword))
+	s.mux.HandleFunc("GET /api/dashboard/metrics", s.requireTech(s.handleDashboardMetrics))
 	s.mux.HandleFunc("GET /api/sessions", s.requireTech(s.handleListSessions))
+	s.mux.HandleFunc("GET /api/sessions/export", s.requireTech(s.handleSessionExport))
 	s.mux.HandleFunc("POST /api/sessions", s.requireTech(s.handleCreateSession))
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.requireTech(s.handleGetSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
+	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
+	s.mux.HandleFunc("GET /api/admins", s.requireAdminRole(s.handleListAdmins))
+	s.mux.HandleFunc("POST /api/admins", s.requireAdminRole(s.handleCreateAdmin))
+	s.mux.HandleFunc("PATCH /api/admins/{id}", s.requireAdminRole(s.handleUpdateAdmin))
+	s.mux.HandleFunc("POST /api/admins/{id}/password", s.requireAdminRole(s.handleResetAdminPassword))
+	s.mux.HandleFunc("GET /api/admin-audit", s.requireAdminRole(s.handleAdminAudit))
 	s.mux.HandleFunc("POST /api/agent/lookup", s.handleAgentLookup)
 	s.mux.HandleFunc("POST /api/agent/redeem", s.handleAgentRedeem)
 	s.mux.HandleFunc("GET /api/download-status", s.handleDownloadStatus)
@@ -136,12 +145,13 @@ func (s *Server) checkStateChangingOrigin(r *http.Request) bool {
 
 func (s *Server) requireTech(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		username, err := authenticateTech(r, s.cfg)
+		admin, err := authenticateAdmin(r, s.cfg, s.store)
 		if err != nil {
+			clearTechCookie(w)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 			return
 		}
-		ctx := context.WithValue(r.Context(), techContextKey{}, username)
+		ctx := context.WithValue(r.Context(), techContextKey{}, admin)
 		next(w, r.WithContext(ctx))
 	}
 }
@@ -149,8 +159,11 @@ func (s *Server) requireTech(next http.HandlerFunc) http.HandlerFunc {
 type techContextKey struct{}
 
 func techName(ctx context.Context) string {
-	v, _ := ctx.Value(techContextKey{}).(string)
-	return v
+	a, _ := ctx.Value(techContextKey{}).(Admin)
+	if strings.TrimSpace(a.DisplayName) != "" {
+		return a.DisplayName
+	}
+	return a.Username
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -184,7 +197,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "origin rejected"})
 		return
 	}
-	if !s.loginLimiter.Allow(s.clientIP(r)) {
+	ip := s.clientIP(r)
+	if !s.loginLimiter.Allow(ip) {
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many login attempts"})
 		return
 	}
@@ -195,25 +209,37 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if !secureEqual(req.Username, s.cfg.TechUsername) || !secureEqual(req.Password, s.cfg.TechPassword) {
+	cred, err := s.store.GetAdminCredentialByUsername(r.Context(), req.Username)
+	if err != nil || !cred.Active || !verifyPassword(req.Password, cred.PasswordSalt, cred.PasswordHash, cred.PasswordIterations) {
 		time.Sleep(250 * time.Millisecond)
+		s.store.AddAdminAudit(r.Context(), nil, normalizeUsername(req.Username), "login_failed", "admin", "", "", ip)
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid username or password"})
 		return
 	}
-	if err := issueTechCookie(w, s.cfg); err != nil {
+	if err := issueAdminCookie(w, s.cfg, cred.Admin); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create login session"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": s.cfg.TechUsername})
+	s.store.RecordAdminLogin(r.Context(), cred.ID)
+	s.store.AddAdminAudit(r.Context(), &cred.ID, cred.Username, "login_success", "admin", adminIDString(cred.ID), "", ip)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "id": cred.ID, "username": cred.Username, "display_name": cred.DisplayName, "role": cred.Role,
+	})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if admin, err := authenticateAdmin(r, s.cfg, s.store); err == nil {
+		s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "logout", "admin", adminIDString(admin.ID), "", s.clientIP(r))
+	}
 	clearTechCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"username": techName(r.Context())})
+	a := currentAdmin(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": a.ID, "username": a.Username, "display_name": a.DisplayName, "role": a.Role, "active": a.Active,
+	})
 }
 
 func newUUID() (string, error) {
@@ -265,14 +291,19 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		now := time.Now().UTC()
+		admin := currentAdmin(r.Context())
 		session := Session{
 			ID: id, CodeHint: code[len(code)-4:], CustomerLabel: strings.TrimSpace(req.CustomerLabel),
-			TechnicianName: techName(r.Context()), RequestedControl: req.RequestedControl,
+			TechnicianName: techName(r.Context()), TechnicianID: &admin.ID, RequestedControl: req.RequestedControl,
 			RequestedElevation: req.RequestedElevation, CreatedAt: now, ExpiresAt: now.Add(s.cfg.SessionTTL),
 		}
 		err = s.store.CreateSession(r.Context(), session, hmacHex(s.cfg.CodeSecret, code))
 		if err == nil {
-			s.store.AddEvent(r.Context(), id, "technician", "session_created", "")
+			admin := currentAdmin(r.Context())
+			s.store.SetSessionTechnicianID(r.Context(), id, admin.ID)
+			s.store.AddEvent(r.Context(), id, admin.Username, "session_created", "")
+			s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_created", "session", id,
+				auditJSON(map[string]any{"customer_label": session.CustomerLabel, "control": session.RequestedControl, "elevation": session.RequestedElevation}), s.clientIP(r))
 			writeJSON(w, http.StatusCreated, map[string]any{"session": session, "code": code})
 			return
 		}
@@ -285,18 +316,23 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	sessions, err := s.store.ListSessions(r.Context(), 60)
+	q, err := sessionQueryFromRequest(r, 200)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	result, err := s.store.SearchSessions(r.Context(), q)
 	if err != nil {
 		log.Printf("list sessions: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not load sessions"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	session, err := s.store.GetSession(r.Context(), id)
+	session, err := s.store.GetSessionWithTechnician(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
@@ -306,7 +342,8 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	events, _ := s.store.ListEvents(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events})
+	notes, _ := s.store.ListSessionNotes(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "notes": notes})
 }
 
 func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +360,9 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not end session"})
 		return
 	}
-	s.store.AddEvent(r.Context(), id, "technician", "session_ended", "")
+	admin := currentAdmin(r.Context())
+	s.store.AddEvent(r.Context(), id, admin.Username, "session_ended", "")
+	s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_ended", "session", id, "", s.clientIP(r))
 	s.hub.End(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
