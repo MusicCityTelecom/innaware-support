@@ -15,6 +15,7 @@ type Session struct {
 	CodeHint           string     `json:"code_hint"`
 	CustomerLabel      string     `json:"customer_label"`
 	TechnicianName     string     `json:"technician_name"`
+	TechnicianID       *int64     `json:"technician_id,omitempty"`
 	Status             string     `json:"status"`
 	RequestedControl   bool       `json:"requested_control"`
 	RequestedElevation bool       `json:"requested_elevation"`
