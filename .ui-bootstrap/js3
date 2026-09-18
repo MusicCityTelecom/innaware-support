@@ -1,0 +1,102 @@
+istener('keydown',(e)=>{if(['F5','F11','F12'].includes(e.key))return;sendInput({kind:'key',code:e.code,down:true});e.preventDefault();});
+canvas.addEventListener('keyup',(e)=>{sendInput({kind:'key',code:e.code,down:false});e.preventDefault();});
+
+$('addAdminButton').addEventListener('click', () => openAdminDialog());
+$('closeAdminDialog').addEventListener('click', () => $('adminDialog').close());
+function openAdminDialog(admin=null) {
+  $('adminForm').reset();
+  $('adminError').textContent='';
+  $('adminId').value=admin?.id || '';
+  $('adminDialogTitle').textContent=admin?'Edit support user':'Add support user';
+  $('adminUsernameLabel').classList.toggle('hidden',!!admin);
+  $('adminPasswordLabel').classList.toggle('hidden',!!admin);
+  $('adminActiveLabel').classList.toggle('hidden',!admin);
+  if(admin){
+    $('adminUsername').value=admin.username;
+    $('adminDisplayName').value=admin.display_name;
+    $('adminRole').value=admin.role;
+    $('adminActive').checked=admin.active;
+  } else {
+    $('adminRole').value='technician';
+    $('adminActive').checked=true;
+  }
+  $('adminDialog').showModal();
+}
+$('adminForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  $('adminError').textContent='';
+  const id=$('adminId').value;
+  try{
+    if(id){
+      await api(`/api/admins/${id}`,{method:'PATCH',body:{display_name:$('adminDisplayName').value,role:$('adminRole').value,active:$('adminActive').checked}});
+    }else{
+      await api('/api/admins',{method:'POST',body:{username:$('adminUsername').value,display_name:$('adminDisplayName').value,role:$('adminRole').value,password:$('adminPassword').value}});
+    }
+    $('adminDialog').close();
+    await Promise.all([loadAdmins(),loadTechnicianFilter()]);
+  }catch(e){$('adminError').textContent=e.message;}
+});
+$('closeResetPasswordDialog').addEventListener('click',()=> $('resetPasswordDialog').close());
+$('resetPasswordForm').addEventListener('submit',async e=>{
+  e.preventDefault();$('resetPasswordError').textContent='';
+  try{
+    await api(`/api/admins/${$('resetAdminId').value}/password`,{method:'POST',body:{password:$('resetPassword').value}});
+    $('resetPasswordDialog').close();$('resetPasswordForm').reset();
+    alert('Password reset. Existing browser sessions for that account have been invalidated.');
+  }catch(e){$('resetPasswordError').textContent=e.message;}
+});
+async function loadAdmins(){
+  try{
+    const data=await api('/api/admins');
+    state.admins=data.admins||[];
+    renderAdmins(data.summary||{});
+  }catch(e){$('adminsList').innerHTML=`<div class="admin-row"><div class="admin-name"><strong>Could not load team</strong><span>${escapeHTML(e.message)}</span></div></div>`;}
+}
+function renderAdmins(summary){
+  $('teamSummary').innerHTML=`<span>${summary.active||0} active</span><span>${summary.admins||0} administrators</span><span>${summary.technicians||0} technicians</span><span>${summary.inactive||0} disabled</span>`;
+  const list=$('adminsList');list.textContent='';
+  for(const a of state.admins){
+    const row=document.createElement('div');row.className='admin-row';
+    row.innerHTML=`<div class="admin-name"><strong>${escapeHTML(a.display_name)}</strong><span>@${escapeHTML(a.username)}</span></div><span class="role-badge ${escapeHTML(a.role)}">${escapeHTML(a.role)}</span><span class="active-badge ${a.active?'active':'inactive'}">${a.active?'active':'disabled'}</span><span class="last-login session-meta">${a.last_login_at?'Last login '+escapeHTML(formatDate(a.last_login_at)):'Never signed in'}</span><div class="row-actions"><button class="ghost edit-admin" type="button">Edit</button><button class="ghost reset-admin" type="button">Password</button></div>`;
+    row.querySelector('.edit-admin').addEventListener('click',()=>openAdminDialog(a));
+    row.querySelector('.reset-admin').addEventListener('click',()=>{
+      $('resetAdminId').value=a.id;$('resetAdminLabel').textContent=`Reset password for ${a.display_name} (@${a.username})`;$('resetPassword').value='';$('resetPasswordError').textContent='';$('resetPasswordDialog').showModal();
+    });
+    list.appendChild(row);
+  }
+}
+$('refreshAuditButton').addEventListener('click',loadAudit);
+async function loadAudit(){
+  try{
+    const data=await api('/api/admin-audit?limit=250');state.audit=data.events||[];renderAudit();
+  }catch(e){$('auditList').innerHTML=`<div class="audit-row"><div>${escapeHTML(e.message)}</div></div>`;}
+}
+function renderAudit(){
+  const list=$('auditList');list.textContent='';
+  if(!state.audit.length){list.innerHTML='<div class="audit-row"><div>No audit events yet.</div></div>';return;}
+  for(const e of state.audit){
+    const row=document.createElement('div');row.className='audit-row';
+    row.innerHTML=`<span class="audit-time">${escapeHTML(formatDate(e.created_at))}</span><span class="audit-actor">${escapeHTML(e.actor_username||'system')}</span><strong>${escapeHTML(prettyEvent(e.event))}</strong><span class="audit-details">${escapeHTML(e.details||'')}</span><span class="audit-ip">${escapeHTML(e.ip_address||'')}</span>`;
+    list.appendChild(row);
+  }
+}
+
+function formatDate(v){if(!v)return 'â';const d=new Date(v);return Number.isNaN(d.getTime())?'â':d.toLocaleString();}
+function sessionDuration(s){
+  if(!s.connected_at)return 'â';
+  const end=s.ended_at?new Date(s.ended_at):new Date();
+  const start=new Date(s.connected_at);
+  const sec=Math.max(0,Math.round((end-start)/1000));
+  if(sec<60)return `${sec}s`;
+  const min=Math.floor(sec/60), rem=sec%60;
+  return min<60?`${min}m ${rem}s`:`${Math.floor(min/60)}h ${min%60}m`;
+}
+function prettyEvent(v){return String(v||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+function escapeHTML(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+
+setInterval(()=>{
+  if(!state.me||state.session)return;
+  if(state.activeTab==='sessions'){loadMetrics();loadSessions();}
+},5000);
+
+bootstrap();
