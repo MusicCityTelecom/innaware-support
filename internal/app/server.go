@@ -62,6 +62,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/me", s.requireTech(s.handleMe))
 	s.mux.HandleFunc("POST /api/account/password", s.requireTech(s.handleChangeOwnPassword))
 	s.mux.HandleFunc("GET /api/dashboard/metrics", s.requireTech(s.handleDashboardMetrics))
+	s.mux.HandleFunc("GET /api/technicians", s.requireTech(s.handleTechnicianDirectory))
 	s.mux.HandleFunc("GET /api/sessions", s.requireTech(s.handleListSessions))
 	s.mux.HandleFunc("GET /api/sessions/export", s.requireTech(s.handleSessionExport))
 	s.mux.HandleFunc("POST /api/sessions", s.requireTech(s.handleCreateSession))
