@@ -32,6 +32,15 @@ if [[ -x "$BIN" ]]; then
   cp -a "$BIN" "$BACKUP/innaware-support-server.previous"
 fi
 
+if command -v mysqldump >/dev/null 2>&1; then
+  echo "Creating pre-update MySQL snapshot..."
+  mysqldump --protocol=socket --single-transaction --quick --skip-lock-tables     --default-character-set=utf8mb4 innaware_support > "$BACKUP/innaware_support.sql"
+  chmod 0600 "$BACKUP/innaware_support.sql"
+  sha256sum "$BACKUP/innaware_support.sql" > "$BACKUP/innaware_support.sql.sha256"
+else
+  echo "WARNING: mysqldump is unavailable; no automatic database snapshot was created." >&2
+fi
+
 rollback_server() {
   echo "New server failed its local health check. Rolling back the previous binary..." >&2
   if [[ -x "$BACKUP/innaware-support-server.previous" ]]; then
