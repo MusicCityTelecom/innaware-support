@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate technician console JavaScript
+        run: node --check internal/webui/web/app.js
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
