@@ -135,6 +135,11 @@ func TestIntegrationOperationsHTTPMySQL(t *testing.T) {
         t.Fatalf("admins status=%d body=%s", admins.Code, admins.Body.String())
     }
 
+    technicians := doJSON(http.MethodGet, "/api/technicians", nil, cookie)
+    if technicians.Code != http.StatusOK || !strings.Contains(technicians.Body.String(), "\"username\":\"admin\"") {
+        t.Fatalf("technicians status=%d body=%s", technicians.Code, technicians.Body.String())
+    }
+
     metrics := doJSON(http.MethodGet, "/api/dashboard/metrics", nil, cookie)
     if metrics.Code != http.StatusOK {
         t.Fatalf("metrics status=%d body=%s", metrics.Code, metrics.Body.String())
