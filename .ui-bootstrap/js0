@@ -1,0 +1,158 @@
+'use strict';
+const $ = (id) => document.getElementById(id);
+const state = {
+  me: null, sessions: [], history: [], admins: [], audit: [],
+  ws: null, session: null, activeTab: 'sessions', lastMove: 0,
+  historyOffset: 0, historyLimit: 50, historyTotal: 0
+};
+
+async function api(path, options = {}) {
+  const init = { credentials: 'same-origin', ...options };
+  if (init.body && typeof init.body !== 'string') {
+    init.headers = { ...(init.headers || {}), 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(init.body);
+  }
+  const response = await fetch(path, init);
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json().catch(() => ({})) : {};
+  if (!response.ok) {
+    if (response.status === 401 && state.me) {
+      state.me = null;
+      setAuthUI(false);
+    }
+    throw new Error(data.error || `Request failed (${response.status})`);
+  }
+  return data;
+}
+
+function show(id, visible) {
+  const el = $(id);
+  if (el) el.classList.toggle('hidden', !visible);
+}
+function isAdmin() { return state.me?.role === 'admin'; }
+function setAuthUI(loggedIn) {
+  show('loginView', !loggedIn);
+  show('consoleView', loggedIn);
+  show('logoutButton', loggedIn);
+  show('accountButton', loggedIn);
+  document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !loggedIn || !isAdmin()));
+  $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} Â· ${state.me.role}` : '';
+  if (!loggedIn) {
+    switchTab('sessions', false);
+  }
+}
+
+async function bootstrap() {
+  try {
+    state.me = await api('/api/me');
+    setAuthUI(true);
+    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+  } catch {
+    state.me = null;
+    setAuthUI(false);
+  }
+  try {
+    const status = await api('/api/download-status');
+    if (status.available) {
+      $('downloadText').textContent = 'Download the customer support app. Your technician will provide the temporary session code.';
+      $('downloadButton').classList.remove('disabled');
+      $('downloadButton').setAttribute('aria-disabled', 'false');
+    } else {
+      $('downloadText').textContent = 'The Windows support app is being prepared on this server. Your technician can provide the current build directly.';
+    }
+  } catch {
+    $('downloadText').textContent = 'Windows support app status is temporarily unavailable.';
+  }
+}
+
+$('loginForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('loginError').textContent = '';
+  try {
+    state.me = await api('/api/login', {
+      method: 'POST',
+      body: { username: $('username').value, password: $('password').value }
+    });
+    $('password').value = '';
+    setAuthUI(true);
+    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+  } catch (e) {
+    $('loginError').textContent = e.message;
+  }
+});
+$('logoutButton').addEventListener('click', async () => {
+  try { await api('/api/logout', { method: 'POST' }); } catch {}
+  location.reload();
+});
+$('accountButton').addEventListener('click', () => {
+  $('accountError').textContent = '';
+  $('accountForm').reset();
+  $('accountDialog').showModal();
+});
+$('closeAccountDialog').addEventListener('click', () => $('accountDialog').close());
+$('accountForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  $('accountError').textContent = '';
+  if ($('newPassword').value !== $('confirmPassword').value) {
+    $('accountError').textContent = 'New passwords do not match.';
+    return;
+  }
+  try {
+    await api('/api/account/password', {
+      method: 'POST',
+      body: { current_password: $('currentPassword').value, new_password: $('newPassword').value }
+    });
+    alert('Password changed. Please sign in again.');
+    location.reload();
+  } catch (e) {
+    $('accountError').textContent = e.message;
+  }
+});
+
+document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+async function switchTab(name, load = true) {
+  if ((name === 'team' || name === 'audit') && !isAdmin()) name = 'sessions';
+  state.activeTab = name;
+  document.querySelectorAll('.tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
+  for (const tab of ['sessions','history','team','audit']) show(`${tab}Tab`, tab === name);
+  if (!load || !state.me) return;
+  if (name === 'sessions') await Promise.all([loadMetrics(), loadSessions()]);
+  if (name === 'history') await loadHistory(true);
+  if (name === 'team') await loadAdmins();
+  if (name === 'audit') await loadAudit();
+}
+
+async function loadMetrics() {
+  if (!state.me) return;
+  try {
+    const m = await api('/api/dashboard/metrics');
+    $('waitingMetric').textContent = m.waiting ?? 0;
+    $('connectedMetric').textContent = m.connected ?? 0;
+    $('todayMetric').textContent = m.created_today ?? 0;
+    $('weekMetric').textContent = m.ended_seven_days ?? 0;
+    $('avgMetric').textContent = m.average_minutes > 0 ? `${Math.round(m.average_minutes)}m` : 'â';
+  } catch (e) { console.error(e); }
+}
+
+function sessionQuery(params = {}) {
+  const q = new URLSearchParams();
+  Object.entries(params).forEach(([k,v]) => {
+    if (v !== undefined && v !== null && String(v) !== '') q.set(k, String(v));
+  });
+  return q.toString();
+}
+
+async function loadSessions() {
+  if (!state.me) return;
+  try {
+    const data = await api('/api/sessions?' + sessionQuery({status:'active',limit:100}));
+    state.sessions = data.sessions || [];
+    renderSessions($('sessionsList'), state.sessions, true);
+  } catch (e) { console.error(e); }
+}
+$('refreshSessionsButton').addEventListener('click', async () => Promise.all([loadMetrics(), loadSessions()]));
+
+function renderSessions(container, sessions, activeOnly = false) {
+  container.textContent = '';
+  if (!sessions.length) {
+    container.innerHTML = `<div class="session-row"><div class="session-label"><strong>${activeOnly ? 'No active sess
