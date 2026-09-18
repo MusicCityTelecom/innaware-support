@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>InnAware Remote Support</title>
+  <meta name="description" content="Attended remote support by TechFinity.">
+  <link rel="stylesheet" href="/app.css">
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a href="/" class="brand" aria-label="InnAware Remote Support home">
+        <span class="brand-main">inn<span>aware</span></span>
+        <small>REMOTE SUPPORT</small>
+      </a>
+      <div class="top-actions">
+        <span id="whoami" class="whoami"></span>
+        <button id="logoutButton" class="ghost hidden" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="publicView" class="public-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">TECHFINITY COMMUNICATIONS / ATTENDED SUPPORT</p>
+          <h1>Remote help without the <em>guesswork.</em></h1>
+          <p class="lead">A TechFinity technician will give you a temporary support code. Download the InnAware Remote Support app, enter the code, review the requested access, and approve the session.</p>
+          <div class="safety-note">
+            <strong>You stay in control.</strong>
+            <span>The session is temporary and requires your approval. You can close the support app to disconnect.</span>
+          </div>
+        </div>
+        <aside class="download-card">
+          <span class="badge">WINDOWS SUPPORT APP</span>
+          <div class="download-icon">↘</div>
+          <h2>Start a support session</h2>
+          <p id="downloadText">Checking whether the Windows support app is available…</p>
+          <a id="downloadButton" class="primary disabled" href="/download/windows" aria-disabled="true">Download for Windows <span>↓</span></a>
+          <p class="small">The support app does not install a permanent remote-access password.</p>
+          <a class="terms-link" href="/terms.html">Remote support terms &amp; privacy</a>
+        </aside>
+      </section>
+
+      <section id="loginView" class="login-panel">
+        <div>
+          <p class="eyebrow">TECHNICIAN ACCESS</p>
+          <h2>Support console</h2>
+          <p>TechFinity technicians can sign in to create and manage attended sessions.</p>
+        </div>
+        <form id="loginForm" autocomplete="on">
+          <label>Username<input id="username" name="username" autocomplete="username" required></label>
+          <label>Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+          <button class="primary" type="submit">Sign in</button>
+          <p id="loginError" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="dashboardView" class="hidden">
+        <div class="dashboard-head">
+          <div><p class="eyebrow">TECHNICIAN CONSOLE</p><h1>Support sessions</h1></div>
+          <button id="newSessionButton" class="primary" type="button">+ New session</button>
+        </div>
+        <div class="metrics">
+          <div><strong id="waitingMetric">0</strong><span>Waiting</span></div>
+          <div><strong id="connectedMetric">0</strong><span>Connected</span></div>
+          <div><strong id="todayMetric">0</strong><span>Created today</span></div>
+        </div>
+        <div id="sessionsList" class="sessions-list"></div>
+      </section>
+
+      <section id="viewerView" class="viewer hidden">
+        <div class="viewer-head">
+          <button id="backButton" class="ghost" type="button">← Sessions</button>
+          <div class="viewer-title"><strong id="viewerLabel">Remote session</strong><span id="viewerStatus" class="status-dot">Waiting</span></div>
+          <button id="endSessionButton" class="danger" type="button">End session</button>
+        </div>
+        <div class="screen-wrap">
+          <canvas id="remoteCanvas" tabindex="0" aria-label="Remote desktop viewer"></canvas>
+          <div id="screenPlaceholder" class="screen-placeholder">
+            <strong>Waiting for customer</strong>
+            <span>The remote screen will appear after the customer enters the session code and approves access.</span>
+          </div>
+        </div>
+        <div class="viewer-foot">
+          <span id="viewerMachine">No customer connected</span>
+          <span>Click the remote screen before typing. Ctrl+Alt+Del and secure-desktop UAC are not supported in this MVP.</span>
+        </div>
+      </section>
+    </main>
+
+    <footer><span>InnAware Remote Support · TechFinity</span><span>Attended sessions only · Nashville, Tennessee</span></footer>
+  </div>
+
+  <dialog id="sessionDialog">
+    <form id="sessionForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">NEW SUPPORT SESSION</p><h2>Create a temporary code</h2></div><button type="button" id="closeSessionDialog" class="icon-button" aria-label="Close">×</button></div>
+      <label>Customer / property label<input id="customerLabel" maxlength="160" placeholder="Example: Hotel front desk"></label>
+      <label class="check"><input id="requestControl" type="checkbox" checked><span><strong>Keyboard and mouse control</strong><small>Customer will be told that control is requested.</small></span></label>
+      <label class="check"><input id="requestElevation" type="checkbox"><span><strong>Administrator elevation may be needed</strong><small>The customer must approve the Windows UAC prompt themselves.</small></span></label>
+      <button class="primary" type="submit">Create session</button>
+      <p id="sessionError" class="error"></p>
+    </form>
+  </dialog>
+
+  <dialog id="codeDialog" class="code-dialog">
+    <div class="dialog-head"><div><p class="eyebrow">SESSION READY</p><h2>Give this code to the customer</h2></div><button type="button" id="closeCodeDialog" class="icon-button" aria-label="Close">×</button></div>
+    <div id="sessionCode" class="session-code">0000 0000</div>
+    <p>The code is single-use and expires automatically. It is intentionally displayed only when the session is created.</p>
+    <button id="copyCodeButton" class="primary" type="button">Copy code</button>
+  </dialog>
+</body>
+</html>
