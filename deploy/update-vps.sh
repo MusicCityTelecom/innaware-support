@@ -22,7 +22,9 @@ echo "Validating target source..."
 go mod download
 go test ./...
 go vet ./...
-node --check internal/webui/web/app.js
+if command -v node >/dev/null 2>&1; then
+  node --check internal/webui/web/app.js
+fi
 go build -trimpath -ldflags='-s -w' -o "$NEW_BIN" ./cmd/server
 chmod 0755 "$NEW_BIN"
 
