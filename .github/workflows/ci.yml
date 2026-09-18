@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: true
+      - run: go mod download
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o dist/innaware-support-server ./cmd/server
+      - uses: actions/upload-artifact@v4
+        with:
+          name: innaware-support-server-linux-amd64
+          path: dist/innaware-support-server
+
+  windows-agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore agent/InnAwareSupport.Agent.csproj
+      - name: Publish Windows x64 single-file agent
+        run: dotnet publish agent/InnAwareSupport.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/agent
+      - name: Normalize artifact filename
+        shell: pwsh
+        run: |
+          Copy-Item dist/agent/InnAwareSupport.exe dist/InnAware-Remote-Support.exe
+          Get-FileHash dist/InnAware-Remote-Support.exe -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InnAware-Remote-Support-Windows-x64
+          path: dist/InnAware-Remote-Support.exe
+
+  preview-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [server, windows-agent]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: InnAware-Remote-Support-Windows-x64
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mvp-latest
+          name: InnAware Support MVP (latest main build)
+          prerelease: true
+          make_latest: false
+          files: release/InnAware-Remote-Support.exe
