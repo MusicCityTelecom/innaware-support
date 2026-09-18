@@ -1,0 +1,40 @@
+name: Bootstrap source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Expand source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/part* | base64 -d > /tmp/source.tgz
+          echo "5c9de14c2c74b5982f72670e29e74cd202914f3773463f3a8a08503f7fc4c21c  /tmp/source.tgz" | sha256sum -c -
+          tar -xzf /tmp/source.tgz --strip-components=1
+          go mod tidy
+          rm -rf .bootstrap
+
+      - name: Commit source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: bootstrap attended remote support MVP"
+          git push
