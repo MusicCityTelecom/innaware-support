@@ -17,6 +17,7 @@
       </a>
       <div class="top-actions">
         <span id="whoami" class="whoami"></span>
+        <button id="accountButton" class="ghost hidden" type="button">Account</button>
         <button id="logoutButton" class="ghost hidden" type="button">Sign out</button>
       </div>
     </header>
@@ -46,8 +47,8 @@
       <section id="loginView" class="login-panel">
         <div>
           <p class="eyebrow">TECHNICIAN ACCESS</p>
-          <h2>Support console</h2>
-          <p>TechFinity technicians can sign in to create and manage attended sessions.</p>
+          <h2>Support operations console</h2>
+          <p>Sign in to create attended sessions, review support history, document work, and manage the support team.</p>
         </div>
         <form id="loginForm" autocomplete="on">
           <label>Username<input id="username" name="username" autocomplete="username" required></label>
@@ -57,35 +58,128 @@
         </form>
       </section>
 
-      <section id="dashboardView" class="hidden">
-        <div class="dashboard-head">
-          <div><p class="eyebrow">TECHNICIAN CONSOLE</p><h1>Support sessions</h1></div>
+      <section id="consoleView" class="hidden">
+        <div class="console-head">
+          <div>
+            <p class="eyebrow">TECHNICIAN CONSOLE</p>
+            <h1>Support operations</h1>
+          </div>
           <button id="newSessionButton" class="primary" type="button">+ New session</button>
         </div>
-        <div class="metrics">
-          <div><strong id="waitingMetric">0</strong><span>Waiting</span></div>
-          <div><strong id="connectedMetric">0</strong><span>Connected</span></div>
-          <div><strong id="todayMetric">0</strong><span>Created today</span></div>
-        </div>
-        <div id="sessionsList" class="sessions-list"></div>
+
+        <nav class="console-tabs" aria-label="Support console sections">
+          <button class="tab active" data-tab="sessions" type="button">Live Sessions</button>
+          <button class="tab" data-tab="history" type="button">History</button>
+          <button id="teamTabButton" class="tab admin-only hidden" data-tab="team" type="button">Team</button>
+          <button id="auditTabButton" class="tab admin-only hidden" data-tab="audit" type="button">Audit</button>
+        </nav>
+
+        <section id="sessionsTab" class="tab-panel">
+          <div class="metrics metrics-five">
+            <div><strong id="waitingMetric">0</strong><span>Waiting / approved</span></div>
+            <div><strong id="connectedMetric">0</strong><span>Connected now</span></div>
+            <div><strong id="todayMetric">0</strong><span>Created today</span></div>
+            <div><strong id="weekMetric">0</strong><span>Completed 7 days</span></div>
+            <div><strong id="avgMetric">—</strong><span>Average support time</span></div>
+          </div>
+          <div class="section-head">
+            <div><h2>Active sessions</h2><p>Waiting, approved, and currently connected support requests.</p></div>
+            <button id="refreshSessionsButton" class="ghost" type="button">Refresh</button>
+          </div>
+          <div id="sessionsList" class="sessions-list"></div>
+        </section>
+
+        <section id="historyTab" class="tab-panel hidden">
+          <div class="section-head">
+            <div><h2>Session history</h2><p>Search completed, expired, and active support sessions.</p></div>
+            <button id="exportHistoryButton" class="ghost" type="button">Export CSV</button>
+          </div>
+          <form id="historyFilters" class="filter-bar">
+            <label class="filter-search">Search<input id="historySearch" placeholder="Property, computer, technician, code suffix"></label>
+            <label>Status
+              <select id="historyStatus">
+                <option value="all">All</option>
+                <option value="active">Active</option>
+                <option value="connected">Connected</option>
+                <option value="waiting">Waiting</option>
+                <option value="approved">Approved</option>
+                <option value="ended">Ended</option>
+                <option value="expired">Expired</option>
+              </select>
+            </label>
+            <label>Technician<select id="historyTechnician"><option value="">All technicians</option></select></label>
+            <label>From<input id="historyFrom" type="date"></label>
+            <label>To<input id="historyTo" type="date"></label>
+            <button class="primary filter-submit" type="submit">Apply</button>
+          </form>
+          <div class="history-summary"><span id="historyCount">0 sessions</span><span id="historyRange"></span></div>
+          <div id="historyList" class="sessions-list"></div>
+          <div class="pager">
+            <button id="historyPrev" class="ghost" type="button">← Previous</button>
+            <span id="historyPage">Page 1</span>
+            <button id="historyNext" class="ghost" type="button">Next →</button>
+          </div>
+        </section>
+
+        <section id="teamTab" class="tab-panel hidden admin-only">
+          <div class="section-head">
+            <div><h2>Support team</h2><p>Create technician accounts, assign roles, disable access, and reset passwords.</p></div>
+            <button id="addAdminButton" class="primary" type="button">+ Add user</button>
+          </div>
+          <div id="teamSummary" class="mini-metrics"></div>
+          <div id="adminsList" class="admin-list"></div>
+        </section>
+
+        <section id="auditTab" class="tab-panel hidden admin-only">
+          <div class="section-head">
+            <div><h2>Administrative audit</h2><p>Recent sign-ins, account changes, exports, notes, and session administration.</p></div>
+            <button id="refreshAuditButton" class="ghost" type="button">Refresh</button>
+          </div>
+          <div id="auditList" class="audit-list"></div>
+        </section>
       </section>
 
       <section id="viewerView" class="viewer hidden">
         <div class="viewer-head">
-          <button id="backButton" class="ghost" type="button">← Sessions</button>
-          <div class="viewer-title"><strong id="viewerLabel">Remote session</strong><span id="viewerStatus" class="status-dot">Waiting</span></div>
+          <button id="backButton" class="ghost" type="button">← Back</button>
+          <div class="viewer-title">
+            <strong id="viewerLabel">Remote session</strong>
+            <span id="viewerStatus" class="status-dot">Waiting</span>
+          </div>
           <button id="endSessionButton" class="danger" type="button">End session</button>
         </div>
-        <div class="screen-wrap">
-          <canvas id="remoteCanvas" tabindex="0" aria-label="Remote desktop viewer"></canvas>
-          <div id="screenPlaceholder" class="screen-placeholder">
-            <strong>Waiting for customer</strong>
-            <span>The remote screen will appear after the customer enters the session code and approves access.</span>
+        <div class="viewer-grid">
+          <div>
+            <div class="screen-wrap">
+              <canvas id="remoteCanvas" tabindex="0" aria-label="Remote desktop viewer"></canvas>
+              <div id="screenPlaceholder" class="screen-placeholder">
+                <strong>Waiting for customer</strong>
+                <span>The remote screen will appear after the customer enters the session code and approves access.</span>
+              </div>
+            </div>
+            <div class="viewer-foot">
+              <span id="viewerMachine">No customer connected</span>
+              <span>Click the remote screen before typing. Ctrl+Alt+Del and secure-desktop UAC are not supported yet.</span>
+            </div>
           </div>
-        </div>
-        <div class="viewer-foot">
-          <span id="viewerMachine">No customer connected</span>
-          <span>Click the remote screen before typing. Ctrl+Alt+Del and secure-desktop UAC are not supported in this MVP.</span>
+          <aside class="session-sidebar">
+            <div class="sidebar-card">
+              <h3>Session details</h3>
+              <dl id="sessionFacts" class="facts"></dl>
+            </div>
+            <div class="sidebar-card">
+              <h3>Technician notes</h3>
+              <div id="sessionNotes" class="notes-list"></div>
+              <form id="noteForm" class="note-form">
+                <textarea id="noteBody" maxlength="4000" placeholder="Document troubleshooting, resolution, follow-up, or customer details…"></textarea>
+                <button class="primary" type="submit">Add note</button>
+              </form>
+            </div>
+            <div class="sidebar-card">
+              <h3>Timeline</h3>
+              <div id="sessionTimeline" class="timeline"></div>
+            </div>
+          </aside>
         </div>
       </section>
     </main>
@@ -96,7 +190,7 @@
   <dialog id="sessionDialog">
     <form id="sessionForm" method="dialog">
       <div class="dialog-head"><div><p class="eyebrow">NEW SUPPORT SESSION</p><h2>Create a temporary code</h2></div><button type="button" id="closeSessionDialog" class="icon-button" aria-label="Close">×</button></div>
-      <label>Customer / property label<input id="customerLabel" maxlength="160" placeholder="Example: Hotel front desk"></label>
+      <label>Customer / property label<input id="customerLabel" maxlength="160" placeholder="Example: Fairfield Inn front desk"></label>
       <label class="check"><input id="requestControl" type="checkbox" checked><span><strong>Keyboard and mouse control</strong><small>Customer will be told that control is requested.</small></span></label>
       <label class="check"><input id="requestElevation" type="checkbox"><span><strong>Administrator elevation may be needed</strong><small>The customer must approve the Windows UAC prompt themselves.</small></span></label>
       <button class="primary" type="submit">Create session</button>
@@ -105,10 +199,50 @@
   </dialog>
 
   <dialog id="codeDialog" class="code-dialog">
-    <div class="dialog-head"><div><p class="eyebrow">SESSION READY</p><h2>Give this code to the customer</h2></div><button type="button" id="closeCodeDialog" class="icon-button" aria-label="Close">×</button></div>
-    <div id="sessionCode" class="session-code">0000 0000</div>
-    <p>The code is single-use and expires automatically. It is intentionally displayed only when the session is created.</p>
-    <button id="copyCodeButton" class="primary" type="button">Copy code</button>
+    <div class="dialog-content">
+      <div class="dialog-head"><div><p class="eyebrow">SESSION READY</p><h2>Give this code to the customer</h2></div><button type="button" id="closeCodeDialog" class="icon-button" aria-label="Close">×</button></div>
+      <div id="sessionCode" class="session-code">0000 0000</div>
+      <p>The code is single-use and expires automatically. It is intentionally displayed only when the session is created.</p>
+      <button id="copyCodeButton" class="primary" type="button">Copy code</button>
+    </div>
+  </dialog>
+
+  <dialog id="adminDialog">
+    <form id="adminForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">TEAM ACCESS</p><h2 id="adminDialogTitle">Add support user</h2></div><button type="button" id="closeAdminDialog" class="icon-button" aria-label="Close">×</button></div>
+      <input id="adminId" type="hidden">
+      <label id="adminUsernameLabel">Username<input id="adminUsername" maxlength="48" autocomplete="off" placeholder="jsmith"></label>
+      <label>Display name<input id="adminDisplayName" maxlength="120" placeholder="John Smith"></label>
+      <label>Role<select id="adminRole"><option value="technician">Technician</option><option value="admin">Administrator</option></select></label>
+      <label id="adminPasswordLabel">Temporary password<input id="adminPassword" type="password" minlength="14" maxlength="256" autocomplete="new-password"></label>
+      <label id="adminActiveLabel" class="check hidden"><input id="adminActive" type="checkbox" checked><span><strong>Account active</strong><small>Disabled accounts cannot sign in and existing cookies stop working.</small></span></label>
+      <button class="primary" type="submit">Save user</button>
+      <p id="adminError" class="error"></p>
+    </form>
+  </dialog>
+
+  <dialog id="resetPasswordDialog">
+    <form id="resetPasswordForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">CREDENTIALS</p><h2>Reset password</h2></div><button type="button" id="closeResetPasswordDialog" class="icon-button" aria-label="Close">×</button></div>
+      <input id="resetAdminId" type="hidden">
+      <p id="resetAdminLabel" class="muted"></p>
+      <label>New password<input id="resetPassword" type="password" minlength="14" maxlength="256" autocomplete="new-password"></label>
+      <button class="primary" type="submit">Reset password</button>
+      <p class="small muted">Existing browser sessions for this account will be invalidated.</p>
+      <p id="resetPasswordError" class="error"></p>
+    </form>
+  </dialog>
+
+  <dialog id="accountDialog">
+    <form id="accountForm" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow">MY ACCOUNT</p><h2>Change password</h2></div><button type="button" id="closeAccountDialog" class="icon-button" aria-label="Close">×</button></div>
+      <label>Current password<input id="currentPassword" type="password" autocomplete="current-password"></label>
+      <label>New password<input id="newPassword" type="password" minlength="14" maxlength="256" autocomplete="new-password"></label>
+      <label>Confirm new password<input id="confirmPassword" type="password" minlength="14" maxlength="256" autocomplete="new-password"></label>
+      <button class="primary" type="submit">Change password</button>
+      <p class="small muted">You will be signed out after the password changes.</p>
+      <p id="accountError" class="error"></p>
+    </form>
   </dialog>
 </body>
 </html>
