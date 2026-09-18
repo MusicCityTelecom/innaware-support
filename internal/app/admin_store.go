@@ -29,6 +29,13 @@ type adminCredential struct {
 	PasswordIterations int
 }
 
+type TechnicianDirectoryEntry struct {
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+	Active      bool   `json:"active"`
+}
+
 type AdminAudit struct {
 	ID            int64     `json:"id"`
 	ActorAdminID  *int64    `json:"actor_admin_id,omitempty"`
@@ -163,6 +170,24 @@ func (s *Store) GetAdminCredentialByUsername(ctx context.Context, username strin
 		return adminCredential{}, err
 	}
 	return a, nil
+}
+
+func (s *Store) ListTechnicianDirectory(ctx context.Context) ([]TechnicianDirectoryEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, display_name, active
+		FROM support_admins ORDER BY active DESC, display_name ASC, username ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TechnicianDirectoryEntry
+	for rows.Next() {
+		var x TechnicianDirectoryEntry
+		if err := rows.Scan(&x.ID, &x.Username, &x.DisplayName, &x.Active); err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListAdmins(ctx context.Context) ([]Admin, error) {
