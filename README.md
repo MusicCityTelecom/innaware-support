@@ -4,7 +4,7 @@ InnAware Support is a self-hosted **attended remote-support** system for TechFin
 
 The project is intentionally session-oriented rather than device/password-oriented. The initial MVP does **not** install unattended access or depend on an existing RustDesk/TeamViewer/AnyDesk installation.
 
-> **Status: early MVP / security review required before production use.** The server/API, technician browser console, Windows screen relay, and keyboard/mouse control path are implemented. The Windows agent still needs CI validation on a real Windows runner and end-to-end acceptance testing on the Vultr VPS before customer use.
+> **Status: early MVP / security review required before production use.** The server/API, technician browser console, Windows screen relay, and keyboard/mouse control path are implemented. Linux server tests/vet/build and the self-contained Windows x64 agent build pass in GitHub Actions. The Vultr server deployment is healthy; end-to-end customer/technician remote-control acceptance testing is still required before customer use.
 
 ## Customer workflow
 
