@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            kind: server
+          - os: windows-latest
+            kind: agent
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.kind == 'server'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - if: matrix.kind == 'server'
+        run: |
+          go mod download
+          go test ./...
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w' -o dist/innaware-support-server-linux-amd64 ./cmd/server
+      - if: matrix.kind == 'agent'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - if: matrix.kind == 'agent'
+        shell: pwsh
+        run: |
+          dotnet restore agent/InnAwareSupport.Agent.csproj
+          dotnet publish agent/InnAwareSupport.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/agent
+          Copy-Item dist/agent/InnAwareSupport.exe dist/InnAware-Remote-Support-Windows-x64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.kind }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: true
+          files: release/*
