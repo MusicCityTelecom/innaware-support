@@ -38,7 +38,7 @@ The short code is **not** the live remote-control key. It is single-use enrollme
 ## MVP components
 
 - **Go server/broker** — HTTPS API behind Apache, technician sessions, short-code enrollment, MySQL persistence, WebSocket relay.
-- **Technician web console** — create/end sessions, see consent state, view remote screen, inject keyboard/mouse input.
+- **Technician operations console** — live sessions, searchable history, metrics, session notes/timeline, CSV export, remote viewer/control, multi-user team management, and administrative audit.
 - **Windows customer agent** — .NET 8 WinForms single-file executable, explicit terms/consent, screen capture, cursor capture, keyboard/mouse input, optional user-approved UAC restart.
 - **Apache deployment** — existing TLS termination on `remote.innawareucp.com`; Go service stays on `127.0.0.1:8787`.
 - **MySQL/MariaDB** — sessions and audit events. Live screen frames are not intentionally persisted.
@@ -54,10 +54,10 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 - no secure-desktop/UAC prompt control;
 - no Ctrl+Alt+Del injection;
 - no permanent service/unattended access;
-- one environment-configured technician account (no MFA/RBAC yet);
+- two built-in support roles (`admin` and `technician`), but no MFA/SSO or fine-grained permission matrix yet;
 - no signed Windows release yet.
 
-These are deliberate MVP boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md).
+These are deliberate MVP boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md).
 
 ## VPS deployment
 
@@ -92,13 +92,13 @@ curl -sS https://remote.innawareucp.com/api/health
 journalctl -u innaware-support.service -f
 ```
 
-The first-run technician username/password are printed once by the installer and stored in:
+The installer-generated username/password are a **bootstrap credential**. On the first start of the multi-user console, they seed the first MySQL administrator only when the administrator table is empty. They are stored root-only in:
 
 ```text
 /etc/innaware-support-app/app.env
 ```
 
-That file is mode `0600`. Change `TECH_PASSWORD` there and restart the service when desired.
+That file is mode `0600`. After the first database administrator exists, browser authentication uses the MySQL account records; support users and password changes are managed in the console. Changing `TECH_PASSWORD` later does not overwrite an existing database account.
 
 ### Update the VPS
 
@@ -193,7 +193,7 @@ agent/                     Windows WinForms customer agent
 
 Remote-control software is security-sensitive. The MVP deliberately keeps the trust model narrow: explicit customer consent, single-use enrollment, random live credentials, no unattended password, HTTPS/WSS, loopback-only application server, and no secure-desktop bypass.
 
-Before broad customer deployment, complete code signing, MFA/RBAC, dependency/release signing, independent review, and real-network acceptance testing. See [docs/SECURITY.md](docs/SECURITY.md).
+Before broad customer deployment, complete code signing, MFA/SSO, finer-grained RBAC, dependency/release signing, independent review, and real-network acceptance testing. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ## License
 
