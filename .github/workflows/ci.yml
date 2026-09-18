@@ -11,6 +11,21 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: rootpass
+          MYSQL_DATABASE: innaware_support_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -prootpass"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      INNAWARE_TEST_MYSQL_DSN: "root:rootpass@tcp(127.0.0.1:3306)/innaware_support_ci?parseTime=true&loc=UTC&charset=utf8mb4"
     steps:
       - uses: actions/checkout@v4
       - name: Validate technician console JavaScript
