@@ -79,6 +79,15 @@ func sessionQueryFromRequest(r *http.Request, maxLimit int) (SessionQuery, error
 	}, nil
 }
 
+func (s *Server) handleTechnicianDirectory(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.ListTechnicianDirectory(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not load technician directory"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"technicians": items})
+}
+
 func (s *Server) handleDashboardMetrics(w http.ResponseWriter, r *http.Request) {
 	m, err := s.store.DashboardMetrics(r.Context())
 	if err != nil {
