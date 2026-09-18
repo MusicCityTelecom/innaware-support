@@ -9,7 +9,10 @@ This repository contains remote-support software. Treat code signing, release in
 - Short codes are HMACed before database storage.
 - Live agent credentials use 256 bits of randomness; only their SHA-256 digests are stored.
 - Explicit terms/consent is required before code redemption.
-- Technician web authentication uses a Secure/HttpOnly/SameSite=Strict signed cookie.
+- Technician web authentication uses MySQL-backed accounts, per-user salted PBKDF2-HMAC-SHA256 password hashes, and a Secure/HttpOnly/SameSite=Strict signed cookie.
+- Browser cookies are bound to an account authentication version; password resets, role changes, and account disable/enable operations invalidate older cookies.
+- Built-in `admin` and `technician` roles separate team/audit administration from ordinary support work.
+- Administrative actions are written to a separate durable audit log.
 - Login and code enrollment are rate-limited in process.
 - The Go service listens on loopback by default and is exposed through Apache HTTPS/WSS.
 - The broker does not intentionally persist remote screen frames.
@@ -20,10 +23,10 @@ This repository contains remote-support software. Treat code signing, release in
 ## Before production use
 
 1. Digitally sign the Windows executable with a TechFinity code-signing identity.
-2. Add real multi-user technician accounts, MFA, RBAC, revocation, and password hashing/SSO. The environment-backed single admin account is an MVP bootstrap mechanism.
+2. Add MFA/SSO and a finer-grained permission matrix beyond the current `admin` / `technician` roles.
 3. Add durable distributed rate limiting if more than one application server is introduced.
 4. Perform an independent security review of the WebSocket broker, input handling, deployment script, and Windows process/elevation boundary.
-5. Add structured audit metadata and retention controls appropriate for customer agreements.
+5. Define and enforce retention controls for support history, technician notes, and administrative audit records appropriate for customer agreements.
 6. Add release signing/checksums and a controlled update channel.
 7. Add automated dependency scanning and operating-system patching.
 8. Keep the service behind HTTPS. Do not expose port 8787 publicly.
