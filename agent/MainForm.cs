@@ -755,7 +755,13 @@ internal sealed class MainForm : Form
                          root.TryGetProperty("connected", out var connectedElement) &&
                          (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
                 {
-                    ApplyViewerStatus(connectedElement.GetBoolean());
+                    var connected = connectedElement.GetBoolean();
+                    ApplyViewerStatus(connected);
+                    if (connected)
+                    {
+                        await SendHelloAsync(ct);
+                        await SendCaptureSettingsAckAsync(ct);
+                    }
                 }
                 else if (type == "viewer_capabilities")
                 {
