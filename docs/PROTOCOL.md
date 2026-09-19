@@ -17,6 +17,8 @@ Production traffic is expected to use HTTPS through Apache.
 - `POST /api/sessions`
 - `GET /api/sessions/{id}`
 - `POST /api/sessions/{id}/notes`
+- `POST /api/sessions/{id}/files` — technician uploads a temporary file for the customer.
+- `GET /api/sessions/{id}/files/{transfer}` — technician downloads a customer-offered temporary file.
 - `POST /api/sessions/{id}/end`
 
 Administrators additionally use:
@@ -34,6 +36,8 @@ Technician authentication uses a MySQL-backed account and an HttpOnly, Secure, S
 - `POST /api/agent/lookup` — validate an unredeemed enrollment code and return technician/request metadata.
 - `POST /api/agent/redeem` — atomically consume the code after consent and return the separate random live agent credential, WSS URL, and live-session deadline.
 - `POST /api/agent/end` — bearer-token-authenticated customer termination. This clears the live token and ends the session server-side.
+- `POST /api/agent/files?session=<uuid>` — customer uploads a temporary file for the connected technician.
+- `GET /api/agent/files/{transfer}?session=<uuid>` — customer downloads a technician-offered temporary file.
 
 ### Downloads / health
 
@@ -79,6 +83,8 @@ Example hello:
   "machine_name": "FRONTDESK-PC",
   "elevated": false,
   "control": true,
+  "clipboard": true,
+  "file_transfer": true,
   "monitors": [
     {
       "index": 0,
@@ -161,6 +167,61 @@ The Windows agent clamps:
 - JPEG quality to 25-85;
 - FPS to 1-12.
 
+## Clipboard text
+
+Clipboard is an explicit per-session permission and is text-only.
+
+Technician -> customer:
+
+```json
+{"type":"clipboard_set","text":"example"}
+```
+
+Technician requests the remote clipboard:
+
+```json
+{"type":"clipboard_get"}
+```
+
+Customer agent -> technician:
+
+```json
+{"type":"clipboard_data","text":"example","length":7}
+```
+
+The relay forwards clipboard messages only when `requested_clipboard=true`. Clipboard text is capped at 256 KB. The browser UI performs clipboard reads/writes only after a technician presses the corresponding clipboard button.
+
+## File transfer
+
+File transfer is also an explicit per-session permission.
+
+Transfers use authenticated HTTPS for file bytes and WebSocket metadata only for offers/status. This avoids mixing file payloads with JPEG screen frames.
+
+Limits and lifecycle:
+
+- 25 MB maximum per file;
+- 30-minute relay TTL;
+- temporary files live only in the support service's private `/tmp` namespace;
+- pending transfer files are deleted when the support session ends;
+- customer inbound files require a Yes/No prompt plus a Save File dialog;
+- customer outbound files require the customer to choose the file using a normal Open File dialog;
+- no file is silently written to or read from the customer machine.
+
+Technician-to-customer offer metadata:
+
+```json
+{
+  "type":"file_offer",
+  "transfer_id":"...",
+  "direction":"to_agent",
+  "name":"diagnostic.txt",
+  "size":12345,
+  "expires_at":"2026-09-19T04:00:00Z"
+}
+```
+
+Customer-to-technician offers use `direction:"to_tech"`. The technician downloads the offered file from the authenticated session sidebar.
+
 ## Reconnection
 
 The Windows agent performs bounded automatic reconnect attempts after transient WebSocket/network failure:
@@ -180,7 +241,7 @@ The same live token is reused. Reconnection stops when:
 
 ## Capture implementation
 
-Phase 2 still uses `Graphics.CopyFromScreen` + JPEG for compatibility and simplicity. It now supports:
+Phase 3 still uses `Graphics.CopyFromScreen` + JPEG for compatibility and simplicity. It now supports:
 
 - selectable monitors;
 - adjustable JPEG quality;
@@ -194,7 +255,7 @@ DXGI Desktop Duplication and hardware video encoding remain the next major perfo
 
 Windows input uses `SendInput`.
 
-Phase 2 expands keyboard support to include:
+Phase 3 retains expanded keyboard support to include:
 
 - letters and number row;
 - F1-F24;
