@@ -70,42 +70,9 @@ jobs:
           name: InnAware-Remote-Support-Windows-x64
           path: dist/InnAware-Remote-Support.exe
 
-  windows-technician:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-      - name: Restore technician client
-        run: dotnet restore technician/InnAwareSupport.Technician.csproj
-      - name: Publish technician client
-        run: dotnet publish technician/InnAwareSupport.Technician.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/technician
-      - name: Normalize technician filename and portable bundle
-        shell: pwsh
-        run: |
-          Copy-Item dist/technician/InnAwareTechnician.exe dist/technician/InnAware-Support-Technician.exe
-          Compress-Archive -Path dist/technician/* -DestinationPath dist/InnAware-Support-Technician-Portable.zip -Force
-          Get-FileHash dist/technician/InnAware-Support-Technician.exe -Algorithm SHA256 | Format-List
-          Get-FileHash dist/InnAware-Support-Technician-Portable.zip -Algorithm SHA256 | Format-List
-      - name: Install Inno Setup
-        shell: pwsh
-        run: choco install innosetup --no-progress -y
-      - name: Build technician installer
-        shell: pwsh
-        run: |
-          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' technician/installer.iss
-          Get-FileHash dist/installer/InnAware-Support-Technician-Setup.exe -Algorithm SHA256 | Format-List
-      - uses: actions/upload-artifact@v4
-        with:
-          name: InnAware-Support-Technician-Windows-x64
-          path: |
-            dist/InnAware-Support-Technician-Portable.zip
-            dist/installer/InnAware-Support-Technician-Setup.exe
-
   preview-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [server, windows-agent, windows-technician]
+    needs: [server, windows-agent]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,17 +81,10 @@ jobs:
         with:
           name: InnAware-Remote-Support-Windows-x64
           path: release
-      - uses: actions/download-artifact@v4
-        with:
-          name: InnAware-Support-Technician-Windows-x64
-          path: release-technician
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: mvp-latest
           name: InnAware Support MVP (latest main build)
           prerelease: true
           make_latest: false
-          files: |
-            release/InnAware-Remote-Support.exe
-            release-technician/InnAware-Support-Technician-Portable.zip
-            release-technician/InnAware-Support-Technician-Setup.exe
+          files: release/InnAware-Remote-Support.exe
