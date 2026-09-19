@@ -30,6 +30,7 @@ internal sealed class MainForm : Form
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
     private int _fps = 6;
+    private int _viewerConnected;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
     private bool _closing;
@@ -251,6 +252,7 @@ internal sealed class MainForm : Form
         _monitorIndex = ScreenCapture.NormalizeScreenIndex(-1);
         _jpegQuality = 55;
         _fps = 6;
+        _viewerConnected = 0;
         _sessionCts = new CancellationTokenSource();
 
         SetStatus("Connecting to technician…");
@@ -275,6 +277,7 @@ internal sealed class MainForm : Form
         var token = _agentToken ?? throw new InvalidOperationException("Support session credential is missing.");
 
         CloseCurrentSocket();
+        Volatile.Write(ref _viewerConnected, 0);
 
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
@@ -330,6 +333,12 @@ internal sealed class MainForm : Form
             {
                 var ws = _ws;
                 if (ws is null || ws.State != WebSocketState.Open) return;
+
+                if (Volatile.Read(ref _viewerConnected) == 0)
+                {
+                    await Task.Delay(250, ct);
+                    continue;
+                }
 
                 var monitorIndex = Volatile.Read(ref _monitorIndex);
                 var quality = Volatile.Read(ref _jpegQuality);
@@ -402,6 +411,12 @@ internal sealed class MainForm : Form
                     ApplyCaptureSettings(root);
                     await SendCaptureSettingsAckAsync(ct);
                 }
+                else if (type == "viewer_status" &&
+                         root.TryGetProperty("connected", out var connectedElement) &&
+                         (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
+                {
+                    ApplyViewerStatus(connectedElement.GetBoolean());
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -410,6 +425,22 @@ internal sealed class MainForm : Form
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
+    }
+
+    private void ApplyViewerStatus(bool connected)
+    {
+        Volatile.Write(ref _viewerConnected, connected ? 1 : 0);
+
+        if (IsDisposed || !IsHandleCreated) return;
+        BeginInvoke((Action)(() =>
+        {
+            if (_sessionCts is null) return;
+            SetStatus(
+                connected
+                    ? "Connected — technician viewer is active."
+                    : "Connected — waiting for technician viewer.");
+            UpdateDetail();
+        }));
     }
 
     private void ApplyCaptureSettings(JsonElement root)
@@ -606,6 +637,7 @@ internal sealed class MainForm : Form
         _agentToken = null;
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
+        Volatile.Write(ref _viewerConnected, 0);
         Interlocked.Exchange(ref _reconnectGate, 0);
 
         if (updateUi && !IsDisposed && IsHandleCreated)
@@ -648,8 +680,9 @@ internal sealed class MainForm : Form
         var expires = _liveExpiresAtUtc == default
             ? ""
             : $" · Session expires {_liveExpiresAtUtc.ToLocalTime():g}";
+        var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         _detail.Text =
-            $"Server: {_options.Server} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)}{expires}";
+            $"Server: {_options.Server} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)
