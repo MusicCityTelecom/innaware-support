@@ -182,7 +182,7 @@ func (s *Store) LookupByCodeHash(ctx context.Context, codeHash string) (Session,
 	return x, nil
 }
 
-func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineName string, termsAccepted bool, liveTTL time.Duration) (Session, error) {
+func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineName string, termsAccepted bool, liveTTLArg ...time.Duration) (Session, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return Session{}, err
@@ -198,6 +198,10 @@ func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineN
 	}
 	if x.Status != "waiting" || !x.ExpiresAt.After(time.Now().UTC()) {
 		return Session{}, errors.New("session is not available")
+	}
+	liveTTL := 8 * time.Hour
+	if len(liveTTLArg) > 0 {
+		liveTTL = liveTTLArg[0]
 	}
 	if liveTTL <= 0 {
 		return Session{}, errors.New("live session TTL must be positive")
