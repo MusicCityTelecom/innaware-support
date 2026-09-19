@@ -1513,7 +1513,7 @@ internal sealed class MainForm : Form
         if (_closing) return;
         _closing = true;
 
-        if (!_explicitEndInProgress)
+        if (!_explicitEndInProgress && !_restartingForElevation)
             TryNotifyEndSync();
 
         StopLocalSession(updateUi: false);
@@ -1555,6 +1555,12 @@ internal sealed class MainForm : Form
             {
                 _disconnect.Visible = false;
                 _sendFile.Visible = false;
+                _chat.Visible = false;
+                _unreadChat = 0;
+                _chatMessages.Clear();
+                if (_chatForm is not null && !_chatForm.IsDisposed)
+                    _chatForm.Hide();
+                UpdateChatButton();
                 _disconnect.SetBounds(36, 302, 455, 45);
                 _connect.Visible = true;
                 _elevate.Visible = true;
