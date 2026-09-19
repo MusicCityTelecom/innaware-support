@@ -22,6 +22,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const maxClipboardBytes = 256 * 1024
+
 type Server struct {
 	cfg          Config
 	store        *Store
@@ -596,8 +598,18 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &envelope) != nil {
 				continue
 			}
-			if (envelope.Type == "clipboard_data" || envelope.Type == "clipboard_status") &&
-				(!session.RequestedClipboard || len(data) > 300*1024) {
+			if envelope.Type == "clipboard_data" {
+				if !session.RequestedClipboard {
+					continue
+				}
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(data, &payload) != nil || len(payload.Text) > maxClipboardBytes {
+					continue
+				}
+			}
+			if envelope.Type == "clipboard_status" && !session.RequestedClipboard {
 				continue
 			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
@@ -633,7 +645,7 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
-	conn.SetReadLimit(384 * 1024)
+	conn.SetReadLimit(1024 * 1024)
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
@@ -660,8 +672,17 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if (envelope.Type == "clipboard_set" || envelope.Type == "clipboard_get") && session.RequestedClipboard {
-			if len(data) > 300*1024 {
+		if envelope.Type == "clipboard_get" && session.RequestedClipboard {
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward clipboard request session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "clipboard_set" && session.RequestedClipboard {
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(data, &payload) != nil || len(payload.Text) > maxClipboardBytes {
 				continue
 			}
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
