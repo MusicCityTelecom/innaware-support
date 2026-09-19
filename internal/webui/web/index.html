@@ -146,7 +146,12 @@
             <strong id="viewerLabel">Remote session</strong>
             <span id="viewerStatus" class="status-dot">Waiting</span>
           </div>
-          <button id="endSessionButton" class="danger" type="button">End session</button>
+          <div class="viewer-head-actions">
+            <button id="popoutViewerButton" class="ghost" type="button">Pop out</button>
+            <button id="recordViewerButton" class="ghost" type="button">Record</button>
+            <button id="requestElevationButton" class="ghost" type="button">Request elevation</button>
+            <button id="endSessionButton" class="danger" type="button">End session</button>
+          </div>
         </div>
         <div id="viewerControls" class="viewer-controls">
           <label>Monitor
@@ -215,6 +220,32 @@
             <div class="sidebar-card">
               <h3>Session details</h3>
               <dl id="sessionFacts" class="facts"></dl>
+            </div>
+            <div id="networkCard" class="sidebar-card">
+              <div class="network-head">
+                <h3>Customer network</h3>
+                <span id="networkUpdated" class="small muted">Waiting for diagnostics</span>
+              </div>
+              <dl id="networkSummary" class="facts network-summary">
+                <dt>Public IP</dt><dd>—</dd>
+                <dt>Connection</dt><dd>—</dd>
+              </dl>
+              <div id="networkAdapters" class="network-adapters">
+                <div class="muted small">Network details will appear after the customer connects.</div>
+              </div>
+            </div>
+            <div id="chatCard" class="sidebar-card">
+              <div class="chat-head">
+                <h3>Customer chat</h3>
+                <span id="chatStatus" class="small muted">Connected chat</span>
+              </div>
+              <div id="chatMessages" class="chat-messages">
+                <div class="muted small">No messages yet.</div>
+              </div>
+              <form id="chatForm" class="chat-form">
+                <textarea id="chatBody" maxlength="4000" placeholder="Type a message to the customer…"></textarea>
+                <button class="primary" type="submit">Send</button>
+              </form>
             </div>
             <div id="fileTransferCard" class="sidebar-card hidden">
               <h3>File transfer</h3>

@@ -65,6 +65,18 @@ func OpenStore(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.migrateChat(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.migrateChat(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.migrateNetwork(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := s.recoverSessionStates(ctx); err != nil {
 		_ = db.Close()
 		return nil, err

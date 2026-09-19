@@ -17,11 +17,14 @@ internal sealed class MainForm : Form
     private readonly Button _elevate = new();
     private readonly Button _disconnect = new();
     private readonly Button _sendFile = new();
+    private readonly Button _chat = new();
     private readonly Label _status = new();
     private readonly Label _detail = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly List<SupportChatMessage> _chatMessages = new();
 
     private ClientWebSocket? _ws;
+    private ChatForm? _chatForm;
     private CancellationTokenSource? _sessionCts;
     private bool _requestedControl;
     private bool _requestedClipboard;
@@ -38,6 +41,8 @@ internal sealed class MainForm : Form
     private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private H264CapabilityInfo? _h264Capability;
+    private NetworkSnapshot? _networkSnapshot;
+    private DateTime _networkSnapshotAtUtc;
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
     private long _captureWindowSent;
@@ -49,6 +54,8 @@ internal sealed class MainForm : Form
     private int _viewerConnected;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
+    private bool _restartingForElevation;
+    private int _unreadChat;
     private bool _closing;
 
     public MainForm(StartupOptions options)
@@ -56,14 +63,19 @@ internal sealed class MainForm : Form
         _options = options;
         Text = "InnAware Remote Support";
         Width = 560;
-        Height = 450;
-        MinimumSize = new Size(520, 420);
+        Height = 520;
+        MinimumSize = new Size(520, 490);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(246, 248, 252);
         Font = new Font("Segoe UI", 10F);
         BuildUi();
         _code.Text = NormalizeCode(options.Code ?? "");
         FormClosing += OnFormClosing;
+        Shown += async (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_options.ResumeFile))
+                await ResumeElevatedSessionAsync(_options.ResumeFile);
+        };
     }
 
     private void BuildUi()
@@ -144,17 +156,26 @@ internal sealed class MainForm : Form
         _sendFile.Visible = false;
         _sendFile.Click += async (_, _) => await SendFileToTechnicianAsync();
 
-        _status.SetBounds(36, 361, 455, 22);
+        _chat.SetBounds(36, 355, 455, 42);
+        _chat.Text = "Chat with Technician";
+        _chat.BackColor = Color.FromArgb(234, 240, 247);
+        _chat.ForeColor = Color.FromArgb(20, 49, 82);
+        _chat.FlatStyle = FlatStyle.Flat;
+        _chat.FlatAppearance.BorderSize = 0;
+        _chat.Visible = false;
+        _chat.Click += (_, _) => ShowChatWindow();
+
+        _status.SetBounds(36, 410, 455, 22);
         _status.Text = "Not connected";
         _status.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _status.ForeColor = Color.FromArgb(100, 114, 130);
 
-        _detail.SetBounds(36, 385, 455, 42);
+        _detail.SetBounds(36, 434, 455, 44);
         _detail.Text = $"Server: {_options.Server}";
         _detail.ForeColor = Color.FromArgb(120, 132, 145);
         _detail.Font = new Font("Segoe UI", 8F);
 
-        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _sendFile, _status, _detail]);
+        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _sendFile, _chat, _status, _detail]);
     }
 
     private static void StylePrimary(Button b)
@@ -198,6 +219,7 @@ internal sealed class MainForm : Form
                 requestedAccess.Add("read and set text in your Windows clipboard");
             if (lookup.RequestedFileTransfer)
                 requestedAccess.Add("send and receive files you explicitly approve (up to 25 MB each)");
+            requestedAccess.Add("share basic network diagnostics (adapter, LAN IP, gateway, DNS, and public IP)");
             var permissions = string.Join(", ", requestedAccess);
             var elevation = lookup.RequestedElevation
                 ? "\n\nThe technician indicated that Administrator access may be needed. Windows will still require you to approve any UAC elevation prompt locally."
@@ -295,6 +317,7 @@ internal sealed class MainForm : Form
         {
             _disconnect.Visible = true;
             _sendFile.Visible = _requestedFileTransfer;
+            _chat.Visible = true;
             _disconnect.SetBounds(36, 302, _requestedFileTransfer ? 220 : 455, 45);
             _connect.Visible = false;
             _elevate.Visible = false;
@@ -344,6 +367,7 @@ internal sealed class MainForm : Form
             .ToArray();
 
         _h264Capability ??= H264Capability.Probe();
+        var network = await GetNetworkSnapshotAsync(ct);
 
         var hello = JsonSerializer.Serialize(new
         {
@@ -363,10 +387,24 @@ internal sealed class MainForm : Form
             h264_hardware_available = _h264Capability.HardwareAvailable,
             h264_hardware_encoders = _h264Capability.HardwareEncoders,
             h264_probe_error = _h264Capability.Error,
+            network,
             live_expires_at = _liveExpiresAtUtc
         });
 
         await SendTextAsync(hello, ct);
+    }
+
+    private async Task<NetworkSnapshot> GetNetworkSnapshotAsync(
+        CancellationToken ct)
+    {
+        if (_networkSnapshot is not null &&
+            DateTime.UtcNow - _networkSnapshotAtUtc < TimeSpan.FromMinutes(1))
+            return _networkSnapshot;
+
+        var snapshot = await NetworkDiagnostics.CaptureAsync(_http, ct);
+        _networkSnapshot = snapshot;
+        _networkSnapshotAtUtc = DateTime.UtcNow;
+        return snapshot;
     }
 
     private async Task CaptureLoopAsync(CancellationToken ct)
@@ -599,6 +637,33 @@ internal sealed class MainForm : Form
                         _ => $"{name}: {status}"
                     });
                 }
+                else if (type == "chat_history" &&
+                         root.TryGetProperty("messages", out var historyElement) &&
+                         historyElement.ValueKind == JsonValueKind.Array)
+                {
+                    ApplyChatHistory(historyElement);
+                }
+                else if (type == "chat_message" &&
+                         root.TryGetProperty("message", out var messageElement))
+                {
+                    var message = ParseChatMessage(messageElement);
+                    if (message is not null)
+                        AddChatMessage(message);
+                }
+                else if (type == "elevation_request")
+                {
+                    await HandleElevationRequestAsync(ct);
+                }
+                else if (type == "recording_status")
+                {
+                    var status = root.TryGetProperty("status", out var recordingElement)
+                        ? recordingElement.GetString() ?? ""
+                        : "";
+                    if (string.Equals(status, "started", StringComparison.OrdinalIgnoreCase))
+                        SetStatus("Technician is recording this support session.");
+                    else if (string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase))
+                        SetStatus("Technician stopped session recording.");
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -608,6 +673,285 @@ internal sealed class MainForm : Form
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
     }
+
+    private void ShowChatWindow()
+    {
+        if (_chatForm is null || _chatForm.IsDisposed)
+        {
+            _chatForm = new ChatForm();
+            _chatForm.SendRequested += async (_, body) =>
+            {
+                try
+                {
+                    var ct = _sessionCts?.Token ?? CancellationToken.None;
+                    await SendTextAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "chat_message",
+                        body
+                    }), ct);
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Could not send chat message: " + ex.Message, true);
+                }
+            };
+        }
+
+        _chatForm.SetMessages(_chatMessages);
+        _unreadChat = 0;
+        UpdateChatButton();
+
+        if (!_chatForm.Visible)
+            _chatForm.Show(this);
+
+        _chatForm.BringToFront();
+        _chatForm.Activate();
+    }
+
+    private void ApplyChatHistory(JsonElement messages)
+    {
+        var items = new List<SupportChatMessage>();
+        foreach (var element in messages.EnumerateArray())
+        {
+            var parsed = ParseChatMessage(element);
+            if (parsed is not null)
+                items.Add(parsed);
+        }
+
+        _chatMessages.Clear();
+        _chatMessages.AddRange(items.OrderBy(x => x.ID));
+
+        if (_chatForm is not null && !_chatForm.IsDisposed)
+            BeginInvoke((Action)(() => _chatForm.SetMessages(_chatMessages)));
+
+        UpdateChatButton();
+    }
+
+    private void AddChatMessage(SupportChatMessage message)
+    {
+        if (message.ID > 0 && _chatMessages.Any(x => x.ID == message.ID))
+            return;
+
+        _chatMessages.Add(message);
+
+        var visible = _chatForm is not null &&
+                      !_chatForm.IsDisposed &&
+                      _chatForm.Visible;
+
+        if (visible)
+        {
+            BeginInvoke((Action)(() => _chatForm?.AppendMessage(message)));
+        }
+        else if (string.Equals(
+                     message.SenderType,
+                     "technician",
+                     StringComparison.OrdinalIgnoreCase))
+        {
+            Interlocked.Increment(ref _unreadChat);
+        }
+
+        UpdateChatButton();
+    }
+
+    private void UpdateChatButton()
+    {
+        if (IsDisposed || !IsHandleCreated)
+            return;
+
+        if (InvokeRequired)
+        {
+            BeginInvoke((Action)UpdateChatButton);
+            return;
+        }
+
+        var unread = Volatile.Read(ref _unreadChat);
+        _chat.Text = unread > 0
+            ? $"Chat with Technician ({unread})"
+            : "Chat with Technician";
+    }
+
+    private static SupportChatMessage? ParseChatMessage(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var id = element.TryGetProperty("id", out var idElement) &&
+                 idElement.TryGetInt64(out var parsedId)
+            ? parsedId
+            : 0L;
+
+        var senderType = element.TryGetProperty("sender_type", out var typeElement)
+            ? typeElement.GetString() ?? ""
+            : "";
+
+        var senderName = element.TryGetProperty("sender_name", out var nameElement)
+            ? nameElement.GetString() ?? ""
+            : "";
+
+        var body = element.TryGetProperty("body", out var bodyElement)
+            ? bodyElement.GetString() ?? ""
+            : "";
+
+        var createdAt = DateTime.UtcNow;
+        if (element.TryGetProperty("created_at", out var createdElement) &&
+            createdElement.ValueKind == JsonValueKind.String &&
+            DateTime.TryParse(
+                createdElement.GetString(),
+                null,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var parsedCreated))
+        {
+            createdAt = parsedCreated;
+        }
+
+        if (body.Length == 0)
+            return null;
+
+        return new SupportChatMessage(
+            id,
+            senderType,
+            senderName,
+            body,
+            createdAt);
+    }
+
+    private async Task ResumeElevatedSessionAsync(string resumeFile)
+    {
+        try
+        {
+            var handoff = ElevationHandoff.ReadAndDelete(resumeFile);
+            if (handoff.LiveExpiresAtUtc <= DateTime.UtcNow)
+                throw new InvalidOperationException("The support session has expired.");
+
+            _requestedControl = handoff.RequestedControl;
+            _requestedClipboard = handoff.RequestedClipboard;
+            _requestedFileTransfer = handoff.RequestedFileTransfer;
+
+            ToggleEntry(false);
+            SetStatus("Resuming elevated support session…");
+
+            await ConnectWebSocketAsync(
+                handoff.WebSocketUrl,
+                handoff.AgentToken,
+                handoff.SessionId,
+                handoff.LiveExpiresAtUtc);
+
+            var ct = _sessionCts?.Token ?? CancellationToken.None;
+            await SendElevationStatusAsync("elevated", ct);
+            SetStatus("Connected as Administrator — technician access is active.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Could not resume elevated support session: " + ex.Message, true);
+            ToggleEntry(true);
+        }
+    }
+
+    private async Task HandleElevationRequestAsync(CancellationToken ct)
+    {
+        if (Program.IsAdministrator())
+        {
+            await SendElevationStatusAsync("elevated", ct);
+            return;
+        }
+
+        await SendElevationStatusAsync("requested", ct);
+
+        var approved = await PromptElevationApprovalAsync();
+        if (!approved)
+        {
+            await SendElevationStatusAsync("declined", ct);
+            SetStatus("Administrator elevation request declined.");
+            return;
+        }
+
+        string? handoffPath = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_sessionId) ||
+                string.IsNullOrWhiteSpace(_agentToken) ||
+                string.IsNullOrWhiteSpace(_webSocketUrl))
+                throw new InvalidOperationException("Live session information is unavailable.");
+
+            handoffPath = ElevationHandoff.Write(new ElevationHandoff(
+                _options.Server,
+                _sessionId,
+                _agentToken,
+                _webSocketUrl,
+                _liveExpiresAtUtc,
+                _requestedControl,
+                _requestedClipboard,
+                _requestedFileTransfer));
+
+            await SendElevationStatusAsync("restarting", ct);
+
+            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            var args =
+                $"--server \"{_options.Server}\" --resume-file \"{handoffPath}\"";
+
+            Process.Start(new ProcessStartInfo(exe, args)
+            {
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+
+            _restartingForElevation = true;
+            BeginInvoke((Action)Close);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            if (handoffPath is not null)
+            {
+                try { File.Delete(handoffPath); } catch { }
+            }
+
+            await SendElevationStatusAsync("uac_cancelled", ct);
+            SetStatus("Windows UAC elevation was cancelled.", true);
+        }
+        catch (Exception ex)
+        {
+            if (handoffPath is not null)
+            {
+                try { File.Delete(handoffPath); } catch { }
+            }
+
+            await SendElevationStatusAsync("failed", ct);
+            SetStatus("Could not elevate support session: " + ex.Message, true);
+        }
+    }
+
+    private Task<bool> PromptElevationApprovalAsync()
+    {
+        var tcs = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        BeginInvoke((Action)(() =>
+        {
+            var answer = MessageBox.Show(
+                this,
+                "Your technician is requesting Administrator access for this active support session.\n\nIf you approve, Windows will show its normal UAC prompt. You must approve that Windows prompt locally.\n\nAllow the technician to request Administrator elevation?",
+                "Administrator Access Requested",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+
+            tcs.TrySetResult(answer == DialogResult.Yes);
+        }));
+
+        return tcs.Task;
+    }
+
+    private Task SendElevationStatusAsync(
+        string status,
+        CancellationToken ct) =>
+        SendTextAsync(
+            JsonSerializer.Serialize(new
+            {
+                type = "elevation_status",
+                status,
+                elevated = Program.IsAdministrator()
+            }),
+            ct);
 
     private static string ClampUtf8Text(string text, int maxBytes)
     {
@@ -1169,7 +1513,7 @@ internal sealed class MainForm : Form
         if (_closing) return;
         _closing = true;
 
-        if (!_explicitEndInProgress)
+        if (!_explicitEndInProgress && !_restartingForElevation)
             TryNotifyEndSync();
 
         StopLocalSession(updateUi: false);
@@ -1187,6 +1531,8 @@ internal sealed class MainForm : Form
         _agentToken = null;
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
+        _networkSnapshot = null;
+        _networkSnapshotAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
         Volatile.Write(ref _scalePercent, 100);
@@ -1209,6 +1555,12 @@ internal sealed class MainForm : Form
             {
                 _disconnect.Visible = false;
                 _sendFile.Visible = false;
+                _chat.Visible = false;
+                _unreadChat = 0;
+                _chatMessages.Clear();
+                if (_chatForm is not null && !_chatForm.IsDisposed)
+                    _chatForm.Hide();
+                UpdateChatButton();
                 _disconnect.SetBounds(36, 302, 455, 45);
                 _connect.Visible = true;
                 _elevate.Visible = true;

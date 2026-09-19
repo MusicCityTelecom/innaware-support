@@ -22,17 +22,19 @@ internal static class Program
     }
 }
 
-internal sealed record StartupOptions(string Server, string? Code)
+internal sealed record StartupOptions(string Server, string? Code, string? ResumeFile)
 {
     public static StartupOptions Parse(string[] args)
     {
         var server = Environment.GetEnvironmentVariable("INNAWARE_SUPPORT_URL") ?? Program.DefaultServer;
         string? code = null;
+        string? resumeFile = null;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--server" && i + 1 < args.Length) server = args[++i];
             else if (args[i] == "--code" && i + 1 < args.Length) code = args[++i];
+            else if (args[i] == "--resume-file" && i + 1 < args.Length) resumeFile = args[++i];
         }
-        return new StartupOptions(server.TrimEnd('/'), code);
+        return new StartupOptions(server.TrimEnd('/'), code, resumeFile);
     }
 }

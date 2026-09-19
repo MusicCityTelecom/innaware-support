@@ -8,6 +8,8 @@ const state = {
   renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
   frameDecodeBusy: false, pendingFrame: null,
   viewMode: 'fit', remoteClipboard: '',
+  network: null, chatMessages: [],
+  recorder: null, recorderChunks: [], recorderStartedAt: null, recorderDownload: true,
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -52,6 +54,7 @@ async function bootstrap() {
     state.me = await api('/api/me');
     setAuthUI(true);
     await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+    await maybeOpenRequestedViewer();
   } catch {
     state.me = null;
     setAuthUI(false);
@@ -81,6 +84,7 @@ $('loginForm').addEventListener('submit', async (event) => {
     $('password').value = '';
     setAuthUI(true);
     await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+    await maybeOpenRequestedViewer();
   } catch (e) {
     $('loginError').textContent = e.message;
   }
@@ -287,6 +291,8 @@ async function openViewer(id) {
     state.session = data.session;
     state.session.events = data.events || [];
     state.session.notes = data.notes || [];
+    state.network = data.network || null;
+    state.chatMessages = [];
     show('consoleView', false);
     show('viewerView', true);
     show('publicView', false);
@@ -296,6 +302,8 @@ async function openViewer(id) {
     setViewerStatus(state.session.status);
     resetViewerCanvas();
     renderSessionDetail();
+    renderNetworkDetails();
+    await loadChatHistory();
     const active = ['waiting','approved','connected'].includes(state.session.status);
     $('endSessionButton').classList.toggle('hidden', !active);
     $('viewerControls').classList.toggle('hidden', !active);
@@ -310,6 +318,11 @@ async function openViewer(id) {
     state.remoteClipboard='';
     resetCaptureTelemetry();
     setViewMode('fit');
+    const popout = new URLSearchParams(location.search).get('popout') === '1';
+    document.body.classList.toggle('popout-mode', popout);
+    $('backButton').textContent = popout ? 'Close viewer' : '← Back';
+    show('recordViewerButton', active);
+    show('requestElevationButton', active);
     if (active) {
       connectViewerWS(id);
       if (state.session.requested_file_transfer) void loadPendingCustomerFiles();
@@ -331,10 +344,18 @@ function resetViewerCanvas() {
   ph.querySelector('span').textContent = 'The remote screen will appear after the customer enters the session code and approves access.';
 }
 function closeViewer(){
+  stopViewerRecording(true);
   if(state.ws){state.ws.close();state.ws=null;}
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
+  const popout = new URLSearchParams(location.search).get('popout') === '1';
   state.session=null;
   state.remoteClipboard='';
+  state.network=null;
+  state.chatMessages=[];
+  if(popout){
+    window.close();
+    return;
+  }
   show('viewerView',false);
   show('consoleView',true);
   show('publicView',true);
@@ -372,6 +393,66 @@ function renderSessionDetail() {
   renderNotes();
   renderTimeline();
 }
+function renderNetworkDetails(){
+  const network=state.network;
+  const summary=$('networkSummary');
+  const adaptersBox=$('networkAdapters');
+  const updated=$('networkUpdated');
+  if(!summary||!adaptersBox||!updated)return;
+
+  if(!network){
+    summary.innerHTML='<dt>Public IP</dt><dd>—</dd><dt>Connection</dt><dd>—</dd>';
+    adaptersBox.innerHTML='<div class="muted small">Network details will appear after the customer connects.</div>';
+    updated.textContent='Waiting for diagnostics';
+    return;
+  }
+
+  const adapters=Array.isArray(network.adapters)?network.adapters:[];
+  const methods=[...new Set(adapters.map(a=>String(a.method||'Other')).filter(Boolean))];
+  const connection=methods.length?methods.join(' + '):'Unknown';
+  summary.innerHTML=[
+    ['Public (WAN) IP',escapeHTML(network.public_ip||'Unavailable')],
+    ['Connection',escapeHTML(connection)],
+    ['Adapters',escapeHTML(String(adapters.length))]
+  ].map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
+
+  const stamp=network.captured_at||network.updated_at;
+  updated.textContent=stamp?`Updated ${formatDate(stamp)}`:'Network snapshot';
+
+  if(!adapters.length){
+    adaptersBox.innerHTML='<div class="muted small">No active IPv4 adapters were reported.</div>';
+    return;
+  }
+
+  adaptersBox.innerHTML=adapters.map(adapter=>{
+    const name=escapeHTML(adapter.name||'Adapter');
+    const description=escapeHTML(adapter.description||'');
+    const method=escapeHTML(adapter.method||'Other');
+    const methodClass=String(adapter.method||'').toLowerCase()==='wired'
+      ? 'wired'
+      : String(adapter.method||'').toLowerCase()==='wireless'
+        ? 'wireless'
+        : '';
+    const ipv4=(adapter.ipv4||[]).map(escapeHTML).join(', ')||'—';
+    const masks=(adapter.netmasks||[]).map(escapeHTML).join(', ')||'—';
+    const gateways=(adapter.gateways||[]).map(escapeHTML).join(', ')||'—';
+    const dns=(adapter.dns_servers||[]).map(escapeHTML).join(', ')||'—';
+    return `<div class="network-adapter">
+      <div class="network-adapter-head">
+        <div><strong>${name}</strong>${adapter.default_route?'<span class="network-default">DEFAULT ROUTE</span>':''}</div>
+        <span class="network-method ${methodClass}">${method}</span>
+      </div>
+      ${description?`<div class="network-description">${description}</div>`:''}
+      <div class="network-kv">
+        <span>LAN IPv4</span><span>${ipv4}</span>
+        <span>Netmask</span><span>${masks}</span>
+        <span>Gateway</span><span>${gateways}</span>
+        <span>DNS</span><span>${dns}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderNotes() {
   const notes = state.session?.notes || [];
   $('sessionNotes').innerHTML = notes.length ? notes.map(n => `<div class="note"><div class="note-meta"><strong>${escapeHTML(n.admin_username)}</strong><span>${escapeHTML(formatDate(n.created_at))}</span></div><div>${escapeHTML(n.body).replace(/\n/g,'<br>')}</div></div>`).join('') : '<div class="muted small">No technician notes yet.</div>';
@@ -440,6 +521,23 @@ function connectViewerWS(id){
           const status=msg.status?String(msg.status):'updated';
           $('fileTransferStatus').textContent=`${name}: ${status}`;
         }
+        if(msg.type==='chat_history'){
+          state.chatMessages=Array.isArray(msg.messages)?msg.messages:[];
+          renderChatMessages();
+        }
+        if(msg.type==='chat_message' && msg.message){
+          addChatMessage(msg.message);
+        }
+        if(msg.type==='elevation_status'){
+          const elevation=String(msg.status||'updated');
+          $('chatStatus').textContent=elevation==='elevated'
+            ? 'Customer agent is elevated'
+            : `Elevation: ${elevation}`;
+          if(elevation==='elevated'){
+            $('requestElevationButton').disabled=true;
+            $('requestElevationButton').textContent='Elevated';
+          }
+        }
       }catch{}
       return;
     }
@@ -472,8 +570,14 @@ function applyAgentHello(msg){
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
+  if(msg.network){
+    state.network=msg.network;
+    renderNetworkDetails();
+  }
   renderSessionDetail();
   $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
+  $('requestElevationButton').disabled=!!msg.elevated;
+  $('requestElevationButton').textContent=msg.elevated?'Elevated':'Request elevation';
   void updateVideoCodecCapability(msg);
 }
 
@@ -668,6 +772,154 @@ $('captureModeSelect').addEventListener('change',sendCaptureSettings);
 $('scaleSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
+
+function requestedViewerFromUrl(){
+  return new URLSearchParams(location.search).get('viewer')||'';
+}
+
+async function maybeOpenRequestedViewer(){
+  const id=requestedViewerFromUrl();
+  if(!id||!state.me||state.session)return;
+  await openViewer(id);
+}
+
+async function loadChatHistory(){
+  if(!state.session)return;
+  try{
+    const data=await api(`/api/sessions/${encodeURIComponent(state.session.id)}/chat`);
+    state.chatMessages=Array.isArray(data.messages)?data.messages:[];
+    renderChatMessages();
+  }catch(e){
+    $('chatStatus').textContent='Chat history unavailable';
+  }
+}
+
+function addChatMessage(message){
+  if(!message)return;
+  const id=Number(message.id)||0;
+  if(id&&state.chatMessages.some(m=>Number(m.id)===id))return;
+  state.chatMessages.push(message);
+  renderChatMessages();
+}
+
+function renderChatMessages(){
+  const box=$('chatMessages');
+  if(!box)return;
+  if(!state.chatMessages.length){
+    box.innerHTML='<div class="muted small">No messages yet.</div>';
+    return;
+  }
+  box.innerHTML=state.chatMessages.map(m=>{
+    const sender=String(m.sender_type||'customer');
+    return `<div class="chat-message ${sender==='technician'?'technician':'customer'}">
+      <div class="chat-meta"><strong>${escapeHTML(m.sender_name||sender)}</strong><span>${escapeHTML(formatDate(m.created_at))}</span></div>
+      <div class="chat-body">${escapeHTML(m.body||'')}</div>
+    </div>`;
+  }).join('');
+  box.scrollTop=box.scrollHeight;
+}
+
+$('chatForm').addEventListener('submit',e=>{
+  e.preventDefault();
+  const body=$('chatBody').value.trim();
+  if(!body||!state.session)return;
+  try{
+    sendViewerMessage({type:'chat_message',body});
+    $('chatBody').value='';
+  }catch(err){
+    $('chatStatus').textContent=err.message;
+  }
+});
+$('chatBody').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    $('chatForm').requestSubmit();
+  }
+});
+
+$('popoutViewerButton').addEventListener('click',()=>{
+  if(!state.session)return;
+  const url=`${location.origin}/?viewer=${encodeURIComponent(state.session.id)}&popout=1`;
+  const popup=window.open(url,'innaware-session-'+state.session.id,'popup=yes,width=1500,height=950,resizable=yes,scrollbars=yes');
+  if(popup)closeViewer();
+});
+
+$('requestElevationButton').addEventListener('click',()=>{
+  if(!state.session)return;
+  if(!confirm('Request administrator elevation from the customer? The customer must approve the request and the normal Windows UAC prompt.'))return;
+  try{
+    sendViewerMessage({type:'elevation_request'});
+    $('requestElevationButton').disabled=true;
+    $('requestElevationButton').textContent='Elevation requested';
+  }catch(e){
+    $('requestElevationButton').disabled=false;
+    alert(e.message);
+  }
+});
+
+$('recordViewerButton').addEventListener('click',()=>{
+  if(state.recorder)stopViewerRecording(true);
+  else startViewerRecording();
+});
+
+function startViewerRecording(){
+  const canvas=$('remoteCanvas');
+  if(!canvas.captureStream||typeof MediaRecorder==='undefined'){
+    alert('This browser does not support technician-side canvas recording.');
+    return;
+  }
+  const stream=canvas.captureStream(15);
+  const mime=[
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ].find(type=>MediaRecorder.isTypeSupported(type))||'';
+  try{
+    state.recorderChunks=[];
+    state.recorderStartedAt=new Date();
+    const recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+    recorder.ondataavailable=e=>{if(e.data&&e.data.size)state.recorderChunks.push(e.data);};
+    recorder.onstop=()=>finishViewerRecording(recorder.mimeType||'video/webm', recorder.stream);
+    recorder.start(1000);
+    state.recorder=recorder;
+    $('recordViewerButton').textContent='Stop recording';
+    $('recordViewerButton').classList.add('recording');
+    try{sendViewerMessage({type:'recording_status',status:'started'});}catch{}
+  }catch(e){
+    alert('Could not start recording: '+e.message);
+  }
+}
+
+function stopViewerRecording(download=true){
+  const recorder=state.recorder;
+  if(!recorder)return;
+  state.recorder=null;
+  state.recorderDownload=download;
+  try{recorder.stop();}catch{}
+  $('recordViewerButton').textContent='Record';
+  $('recordViewerButton').classList.remove('recording');
+  try{sendViewerMessage({type:'recording_status',status:'stopped'});}catch{}
+}
+
+function finishViewerRecording(mimeType, stream){
+  const chunks=state.recorderChunks.splice(0);
+  const shouldDownload=state.recorderDownload;
+  state.recorderDownload=true;
+  if(stream){
+    for(const track of stream.getTracks())track.stop();
+  }
+  if(!chunks.length||!shouldDownload)return;
+  const blob=new Blob(chunks,{type:mimeType});
+  const started=state.recorderStartedAt||new Date();
+  state.recorderStartedAt=null;
+  const label=(state.session?.customer_label||'session').replace(/[^a-z0-9_-]+/gi,'-').replace(/^-+|-+$/g,'')||'session';
+  const stamp=started.toISOString().replace(/[:.]/g,'-');
+  const link=document.createElement('a');
+  link.href=URL.createObjectURL(blob);
+  link.download=`InnAware-${label}-${stamp}.webm`;
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(link.href),30000);
+}
 
 function setViewMode(mode){
   state.viewMode=mode==='actual'?'actual':'fit';

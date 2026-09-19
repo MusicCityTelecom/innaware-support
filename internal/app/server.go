@@ -71,6 +71,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/export", s.requireTech(s.handleSessionExport))
 	s.mux.HandleFunc("POST /api/sessions", s.requireTech(s.handleCreateSession))
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.requireTech(s.handleGetSession))
+	s.mux.HandleFunc("GET /api/sessions/{id}/chat", s.requireTech(s.handleChatHistory))
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
 	s.mux.HandleFunc("POST /api/sessions/{id}/files", s.requireTech(s.handleTechFileUpload))
@@ -363,7 +364,13 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	events, _ := s.store.ListEvents(r.Context(), id)
 	notes, _ := s.store.ListSessionNotes(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "notes": notes})
+	network, _ := s.store.GetSessionNetwork(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": session,
+		"events": events,
+		"notes": notes,
+		"network": network,
+	})
 }
 
 func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +576,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	viewerConnected := s.hub.hasTech(id)
 	_ = peer.write(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"viewer_status","connected":%t}`, viewerConnected)))
+	s.sendChatHistoryToPeer(r.Context(), id, peer)
 	defer func() {
 		if s.hub.unsetAgent(id, peer) {
 			_ = s.store.MarkAgentDisconnected(context.Background(), id)
@@ -599,6 +607,20 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(data, &envelope) != nil {
 				continue
 			}
+			if envelope.Type == "hello" {
+				var hello struct {
+					Network *SessionNetworkSnapshot `json:"network"`
+				}
+				if json.Unmarshal(data, &hello) == nil && hello.Network != nil {
+					if err := s.store.UpsertSessionNetwork(
+						r.Context(),
+						id,
+						*hello.Network,
+					); err != nil {
+						log.Printf("persist network snapshot session=%s: %v", id, err)
+					}
+				}
+			}
 			if envelope.Type == "clipboard_data" {
 				if !session.RequestedClipboard {
 					continue
@@ -611,6 +633,50 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if envelope.Type == "clipboard_status" && !session.RequestedClipboard {
+				continue
+			}
+			if envelope.Type == "chat_message" {
+				var payload struct {
+					Body string `json:"body"`
+				}
+				if json.Unmarshal(data, &payload) != nil {
+					continue
+				}
+				message, err := s.createChatMessage(
+					r.Context(),
+					id,
+					"customer",
+					session.MachineName,
+					payload.Body,
+				)
+				if err != nil {
+					continue
+				}
+				normalized := chatMessageEnvelope(message)
+				_ = peer.write(websocket.TextMessage, normalized)
+				_ = s.hub.sendToTech(id, websocket.TextMessage, normalized)
+				continue
+			}
+			if envelope.Type == "elevation_status" {
+				if len(data) <= 8*1024 {
+					var payload struct {
+						Status string `json:"status"`
+					}
+					if json.Unmarshal(data, &payload) == nil {
+						status := strings.ToLower(strings.TrimSpace(payload.Status))
+						switch status {
+						case "requested", "declined", "uac_cancelled", "restarting", "elevated", "failed":
+							s.store.AddEvent(
+								r.Context(),
+								id,
+								"customer",
+								"elevation_"+status,
+								"",
+							)
+							_ = s.hub.sendToTech(id, websocket.TextMessage, data)
+						}
+					}
+				}
 				continue
 			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
@@ -646,6 +712,7 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
+	s.sendChatHistoryToPeer(r.Context(), id, peer)
 	conn.SetReadLimit(1024 * 1024)
 	for {
 		mt, data, err := conn.ReadMessage()
@@ -703,6 +770,74 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward file status session=%s: %v", id, err)
 			}
+			continue
+		}
+		if envelope.Type == "chat_message" {
+			var payload struct {
+				Body string `json:"body"`
+			}
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			admin := currentAdmin(r.Context())
+			message, err := s.createChatMessage(
+				r.Context(),
+				id,
+				"technician",
+				techName(r.Context()),
+				payload.Body,
+			)
+			if err != nil {
+				continue
+			}
+			normalized := chatMessageEnvelope(message)
+			_ = peer.write(websocket.TextMessage, normalized)
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, normalized)
+			s.store.AddAdminAudit(
+				r.Context(),
+				&admin.ID,
+				admin.Username,
+				"chat_message_sent",
+				"session",
+				id,
+				"",
+				s.clientIP(r),
+			)
+			continue
+		}
+		if envelope.Type == "elevation_request" {
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(r.Context(), id, admin.Username, "elevation_requested", "")
+			s.store.AddAdminAudit(
+				r.Context(),
+				&admin.ID,
+				admin.Username,
+				"elevation_requested",
+				"session",
+				id,
+				"",
+				s.clientIP(r),
+			)
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"elevation_request"}`)); err != nil {
+				log.Printf("forward elevation request session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "recording_status" {
+			var payload struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			status := strings.ToLower(strings.TrimSpace(payload.Status))
+			if status != "started" && status != "stopped" {
+				continue
+			}
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(r.Context(), id, admin.Username, "recording_"+status, "technician-side recording")
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, data)
+			continue
 		}
 	}
 }
