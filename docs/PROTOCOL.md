@@ -72,8 +72,8 @@ The token is generated only after consent and the database stores only its SHA-2
 
 Agent -> server/technician:
 
-- Binary messages: complete JPEG screen frames.
-- Text messages: hello/status/capture metadata.
+- Binary messages: complete JPEG screen frames or framed H.264 Annex-B access units.
+- Text messages: hello/status/capture metadata/capability negotiation.
 
 Example hello:
 
@@ -265,6 +265,41 @@ Idle-frame behavior:
 Transport remains JPEG over the existing WebSocket. Browser telemetry reports received FPS/bandwidth, while agent telemetry reports the active backend, frames sent/skipped, encoded bytes, and average capture+JPEG cost.
 
 Hardware H.264/H.265 encoding remains the next major transport/encoding architecture step.
+
+## Experimental H.264 transport
+
+JPEG remains the default frame transport. H.264 is enabled only when the customer agent reports a usable Media Foundation H.264 encoder, the technician browser reports WebCodecs H.264 decode support, and the technician selects H.264.
+
+The technician capability message is:
+
+```json
+{"type":"viewer_capabilities","h264_webcodecs":true}
+```
+
+H.264 frames use the same agent-to-technician binary WebSocket channel as JPEG. H.264 messages start with a 16-byte InnAware header:
+
+- bytes 0-3: ASCII `IAH1`;
+- byte 4: bit 0 is set for a keyframe;
+- bytes 5-7: reserved and currently zero;
+- bytes 8-15: signed big-endian monotonic timestamp in microseconds;
+- byte 16 onward: H.264 Annex-B access-unit bytes.
+
+JPEG binary messages have no InnAware header and are unchanged.
+
+The agent normalizes length-prefixed AVC and AVC configuration-record parameter sets into Annex-B. SPS/PPS are prepended to a keyframe when the encoder exposes them separately.
+
+The browser decodes H.264 with WebCodecs `VideoDecoder` and paints decoded `VideoFrame` objects onto the existing remote canvas. Decoder failure, excessive decoder backlog, encoder initialization failure, capability mismatch, or viewer reconnect causes an automatic switch back to JPEG without ending the support session.
+
+Asynchronous hardware Media Foundation transforms use a bounded event cycle:
+
+```text
+TransformNeedInput
+  -> ProcessInput(one frame)
+  -> TransformHaveOutput
+  -> ProcessOutput(one access unit)
+```
+
+Only one source frame is outstanding at a time. If the transform exceeds its latency budget, H.264 is abandoned for that session and JPEG continues.
 
 ## Input implementation
 
