@@ -637,6 +637,33 @@ internal sealed class MainForm : Form
                         _ => $"{name}: {status}"
                     });
                 }
+                else if (type == "chat_history" &&
+                         root.TryGetProperty("messages", out var historyElement) &&
+                         historyElement.ValueKind == JsonValueKind.Array)
+                {
+                    ApplyChatHistory(historyElement);
+                }
+                else if (type == "chat_message" &&
+                         root.TryGetProperty("message", out var messageElement))
+                {
+                    var message = ParseChatMessage(messageElement);
+                    if (message is not null)
+                        AddChatMessage(message);
+                }
+                else if (type == "elevation_request")
+                {
+                    await HandleElevationRequestAsync(ct);
+                }
+                else if (type == "recording_status")
+                {
+                    var status = root.TryGetProperty("status", out var recordingElement)
+                        ? recordingElement.GetString() ?? ""
+                        : "";
+                    if (string.Equals(status, "started", StringComparison.OrdinalIgnoreCase))
+                        SetStatus("Technician is recording this support session.");
+                    else if (string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase))
+                        SetStatus("Technician stopped session recording.");
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -646,6 +673,285 @@ internal sealed class MainForm : Form
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
     }
+
+    private void ShowChatWindow()
+    {
+        if (_chatForm is null || _chatForm.IsDisposed)
+        {
+            _chatForm = new ChatForm();
+            _chatForm.SendRequested += async (_, body) =>
+            {
+                try
+                {
+                    var ct = _sessionCts?.Token ?? CancellationToken.None;
+                    await SendTextAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "chat_message",
+                        body
+                    }), ct);
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Could not send chat message: " + ex.Message, true);
+                }
+            };
+        }
+
+        _chatForm.SetMessages(_chatMessages);
+        _unreadChat = 0;
+        UpdateChatButton();
+
+        if (!_chatForm.Visible)
+            _chatForm.Show(this);
+
+        _chatForm.BringToFront();
+        _chatForm.Activate();
+    }
+
+    private void ApplyChatHistory(JsonElement messages)
+    {
+        var items = new List<SupportChatMessage>();
+        foreach (var element in messages.EnumerateArray())
+        {
+            var parsed = ParseChatMessage(element);
+            if (parsed is not null)
+                items.Add(parsed);
+        }
+
+        _chatMessages.Clear();
+        _chatMessages.AddRange(items.OrderBy(x => x.ID));
+
+        if (_chatForm is not null && !_chatForm.IsDisposed)
+            BeginInvoke((Action)(() => _chatForm.SetMessages(_chatMessages)));
+
+        UpdateChatButton();
+    }
+
+    private void AddChatMessage(SupportChatMessage message)
+    {
+        if (message.ID > 0 && _chatMessages.Any(x => x.ID == message.ID))
+            return;
+
+        _chatMessages.Add(message);
+
+        var visible = _chatForm is not null &&
+                      !_chatForm.IsDisposed &&
+                      _chatForm.Visible;
+
+        if (visible)
+        {
+            BeginInvoke((Action)(() => _chatForm?.AppendMessage(message)));
+        }
+        else if (string.Equals(
+                     message.SenderType,
+                     "technician",
+                     StringComparison.OrdinalIgnoreCase))
+        {
+            Interlocked.Increment(ref _unreadChat);
+        }
+
+        UpdateChatButton();
+    }
+
+    private void UpdateChatButton()
+    {
+        if (IsDisposed || !IsHandleCreated)
+            return;
+
+        if (InvokeRequired)
+        {
+            BeginInvoke((Action)UpdateChatButton);
+            return;
+        }
+
+        var unread = Volatile.Read(ref _unreadChat);
+        _chat.Text = unread > 0
+            ? $"Chat with Technician ({unread})"
+            : "Chat with Technician";
+    }
+
+    private static SupportChatMessage? ParseChatMessage(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var id = element.TryGetProperty("id", out var idElement) &&
+                 idElement.TryGetInt64(out var parsedId)
+            ? parsedId
+            : 0L;
+
+        var senderType = element.TryGetProperty("sender_type", out var typeElement)
+            ? typeElement.GetString() ?? ""
+            : "";
+
+        var senderName = element.TryGetProperty("sender_name", out var nameElement)
+            ? nameElement.GetString() ?? ""
+            : "";
+
+        var body = element.TryGetProperty("body", out var bodyElement)
+            ? bodyElement.GetString() ?? ""
+            : "";
+
+        var createdAt = DateTime.UtcNow;
+        if (element.TryGetProperty("created_at", out var createdElement) &&
+            createdElement.ValueKind == JsonValueKind.String &&
+            DateTime.TryParse(
+                createdElement.GetString(),
+                null,
+                System.Globalization.DateTimeStyles.RoundtripKind,
+                out var parsedCreated))
+        {
+            createdAt = parsedCreated;
+        }
+
+        if (body.Length == 0)
+            return null;
+
+        return new SupportChatMessage(
+            id,
+            senderType,
+            senderName,
+            body,
+            createdAt);
+    }
+
+    private async Task ResumeElevatedSessionAsync(string resumeFile)
+    {
+        try
+        {
+            var handoff = ElevationHandoff.ReadAndDelete(resumeFile);
+            if (handoff.LiveExpiresAtUtc <= DateTime.UtcNow)
+                throw new InvalidOperationException("The support session has expired.");
+
+            _requestedControl = handoff.RequestedControl;
+            _requestedClipboard = handoff.RequestedClipboard;
+            _requestedFileTransfer = handoff.RequestedFileTransfer;
+
+            ToggleEntry(false);
+            SetStatus("Resuming elevated support session…");
+
+            await ConnectWebSocketAsync(
+                handoff.WebSocketUrl,
+                handoff.AgentToken,
+                handoff.SessionId,
+                handoff.LiveExpiresAtUtc);
+
+            var ct = _sessionCts?.Token ?? CancellationToken.None;
+            await SendElevationStatusAsync("elevated", ct);
+            SetStatus("Connected as Administrator — technician access is active.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Could not resume elevated support session: " + ex.Message, true);
+            ToggleEntry(true);
+        }
+    }
+
+    private async Task HandleElevationRequestAsync(CancellationToken ct)
+    {
+        if (Program.IsAdministrator())
+        {
+            await SendElevationStatusAsync("elevated", ct);
+            return;
+        }
+
+        await SendElevationStatusAsync("requested", ct);
+
+        var approved = await PromptElevationApprovalAsync();
+        if (!approved)
+        {
+            await SendElevationStatusAsync("declined", ct);
+            SetStatus("Administrator elevation request declined.");
+            return;
+        }
+
+        string? handoffPath = null;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_sessionId) ||
+                string.IsNullOrWhiteSpace(_agentToken) ||
+                string.IsNullOrWhiteSpace(_webSocketUrl))
+                throw new InvalidOperationException("Live session information is unavailable.");
+
+            handoffPath = ElevationHandoff.Write(new ElevationHandoff(
+                _options.Server,
+                _sessionId,
+                _agentToken,
+                _webSocketUrl,
+                _liveExpiresAtUtc,
+                _requestedControl,
+                _requestedClipboard,
+                _requestedFileTransfer));
+
+            await SendElevationStatusAsync("restarting", ct);
+
+            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            var args =
+                $"--server \"{_options.Server}\" --resume-file \"{handoffPath}\"";
+
+            Process.Start(new ProcessStartInfo(exe, args)
+            {
+                UseShellExecute = true,
+                Verb = "runas"
+            });
+
+            _restartingForElevation = true;
+            BeginInvoke((Action)Close);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            if (handoffPath is not null)
+            {
+                try { File.Delete(handoffPath); } catch { }
+            }
+
+            await SendElevationStatusAsync("uac_cancelled", ct);
+            SetStatus("Windows UAC elevation was cancelled.", true);
+        }
+        catch (Exception ex)
+        {
+            if (handoffPath is not null)
+            {
+                try { File.Delete(handoffPath); } catch { }
+            }
+
+            await SendElevationStatusAsync("failed", ct);
+            SetStatus("Could not elevate support session: " + ex.Message, true);
+        }
+    }
+
+    private Task<bool> PromptElevationApprovalAsync()
+    {
+        var tcs = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        BeginInvoke((Action)(() =>
+        {
+            var answer = MessageBox.Show(
+                this,
+                "Your technician is requesting Administrator access for this active support session.\n\nIf you approve, Windows will show its normal UAC prompt. You must approve that Windows prompt locally.\n\nAllow the technician to request Administrator elevation?",
+                "Administrator Access Requested",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+
+            tcs.TrySetResult(answer == DialogResult.Yes);
+        }));
+
+        return tcs.Task;
+    }
+
+    private Task SendElevationStatusAsync(
+        string status,
+        CancellationToken ct) =>
+        SendTextAsync(
+            JsonSerializer.Serialize(new
+            {
+                type = "elevation_status",
+                status,
+                elevated = Program.IsAdministrator()
+            }),
+            ct);
 
     private static string ClampUtf8Text(string text, int maxBytes)
     {
