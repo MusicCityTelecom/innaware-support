@@ -178,9 +178,9 @@ internal sealed class DxgiScreenCapture : IDisposable
         throw new InvalidOperationException($"DXGI output {wantedName} was not found.");
     }
 
-    public DxgiCaptureStatus TryCaptureJpeg(int timeoutMs, long quality, int scalePercent, out byte[]? jpeg)
+    public DxgiCaptureStatus TryCaptureBitmap(int timeoutMs, out Bitmap? bitmap)
     {
-        jpeg = null;
+        bitmap = null;
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var result = _duplication.AcquireNextFrame(
@@ -214,11 +214,15 @@ internal sealed class DxgiScreenCapture : IDisposable
             var mapped = _context.Map(_staging, 0, MapMode.Read);
             try
             {
-                using var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+                bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
                 CopyMappedFrame(bitmap, mapped.DataPointer, (int)mapped.RowPitch);
                 DrawCursor(bitmap);
-
-                jpeg = EncodeJpeg(bitmap, quality, scalePercent);
+            }
+            catch
+            {
+                bitmap?.Dispose();
+                bitmap = null;
+                throw;
             }
             finally
             {
@@ -232,6 +236,24 @@ internal sealed class DxgiScreenCapture : IDisposable
             resource?.Dispose();
             _duplication.ReleaseFrame();
         }
+    }
+
+    public DxgiCaptureStatus TryCaptureJpeg(
+        int timeoutMs,
+        long quality,
+        int scalePercent,
+        out byte[]? jpeg)
+    {
+        jpeg = null;
+        var status = TryCaptureBitmap(timeoutMs, out var bitmap);
+        if (status != DxgiCaptureStatus.Frame || bitmap is null)
+            return status;
+
+        using (bitmap)
+        {
+            jpeg = EncodeJpeg(bitmap, quality, scalePercent);
+        }
+        return DxgiCaptureStatus.Frame;
     }
 
     private static byte[] EncodeJpeg(Bitmap source, long quality, int scalePercent)
