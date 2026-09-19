@@ -462,6 +462,8 @@ function applyAgentHello(msg){
   }
   state.activeMonitor=Number.isInteger(msg.active_monitor)?msg.active_monitor:0;
   select.value=String(state.activeMonitor);
+  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
+  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.adaptive_fps) $('fpsSelect').value='0';
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
@@ -481,7 +483,7 @@ function applyCaptureSettingsAck(msg){
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.capture_mode) $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   const fpsLabel=msg.adaptive_fps?`Adaptive (${Number(msg.fps)||0} FPS now)`:`${$('fpsSelect').value} FPS`;
-  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · JPEG ${$('qualitySelect').value} · ${fpsLabel}`;
+  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · ${$('scaleSelect').value}% · JPEG ${$('qualitySelect').value} · ${fpsLabel}`;
 }
 
 function applyCaptureTelemetry(msg){
@@ -497,6 +499,7 @@ function applyCaptureTelemetry(msg){
 function sendCaptureSettings(){
   if(!state.ws||state.ws.readyState!==WebSocket.OPEN)return;
   const monitor=Number.parseInt($('monitorSelect').value,10);
+  const scale_percent=Number.parseInt($('scaleSelect').value,10);
   const jpeg_quality=Number.parseInt($('qualitySelect').value,10);
   const fps=Number.parseInt($('fpsSelect').value,10);
   const capture_mode=$('captureModeSelect').value==='gdi'?'gdi':'auto';
@@ -504,6 +507,7 @@ function sendCaptureSettings(){
   state.ws.send(JSON.stringify({
     type:'capture_settings',
     monitor,
+    scale_percent,
     jpeg_quality,
     fps,
     adaptive_fps:fps===0,
@@ -521,6 +525,7 @@ function resetCaptureTelemetry(){
   $('viewerCaptureState').textContent='Capture settings pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
   $('captureModeSelect').value='auto';
+  $('scaleSelect').value='100';
   $('qualitySelect').value='55';
   $('fpsSelect').value='6';
 }
@@ -619,6 +624,7 @@ function updateViewerFrameTelemetry(){
 
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
 $('captureModeSelect').addEventListener('change',sendCaptureSettings);
+$('scaleSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
 
