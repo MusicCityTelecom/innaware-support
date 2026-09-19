@@ -641,14 +641,17 @@ internal sealed class MainForm : Form
                          root.TryGetProperty("messages", out var historyElement) &&
                          historyElement.ValueKind == JsonValueKind.Array)
                 {
-                    ApplyChatHistory(historyElement);
+                    await ApplyChatHistoryAsync(historyElement, ct);
                 }
                 else if (type == "chat_message" &&
                          root.TryGetProperty("message", out var messageElement))
                 {
                     var message = ParseChatMessage(messageElement);
                     if (message is not null)
+                    {
+                        await HydrateChatImageAsync(message, ct);
                         AddChatMessage(message);
+                    }
                 }
                 else if (type == "elevation_request")
                 {
@@ -695,6 +698,21 @@ internal sealed class MainForm : Form
                     SetStatus("Could not send chat message: " + ex.Message, true);
                 }
             };
+            _chatForm.ImageSendRequested += async (_, args) =>
+            {
+                try
+                {
+                    var ct = _sessionCts?.Token ?? CancellationToken.None;
+                    await SendChatImageToTechnicianAsync(
+                        args.Path,
+                        args.Caption,
+                        ct);
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Could not send chat picture: " + ex.Message, true);
+                }
+            };
         }
 
         _chatForm.SetMessages(_chatMessages);
@@ -708,7 +726,9 @@ internal sealed class MainForm : Form
         _chatForm.Activate();
     }
 
-    private void ApplyChatHistory(JsonElement messages)
+    private async Task ApplyChatHistoryAsync(
+        JsonElement messages,
+        CancellationToken ct)
     {
         var items = new List<SupportChatMessage>();
         foreach (var element in messages.EnumerateArray())
@@ -716,6 +736,13 @@ internal sealed class MainForm : Form
             var parsed = ParseChatMessage(element);
             if (parsed is not null)
                 items.Add(parsed);
+        }
+
+        foreach (var item in items)
+        {
+            if (ct.IsCancellationRequested)
+                break;
+            await HydrateChatImageAsync(item, ct);
         }
 
         _chatMessages.Clear();
@@ -792,6 +819,24 @@ internal sealed class MainForm : Form
             ? bodyElement.GetString() ?? ""
             : "";
 
+        var attachmentTransferId =
+            element.TryGetProperty("attachment_transfer_id", out var transferElement)
+                ? transferElement.GetString() ?? ""
+                : "";
+        var attachmentName =
+            element.TryGetProperty("attachment_name", out var attachmentNameElement)
+                ? attachmentNameElement.GetString() ?? ""
+                : "";
+        var attachmentMime =
+            element.TryGetProperty("attachment_mime", out var attachmentMimeElement)
+                ? attachmentMimeElement.GetString() ?? ""
+                : "";
+        var attachmentSize =
+            element.TryGetProperty("attachment_size", out var attachmentSizeElement) &&
+            attachmentSizeElement.TryGetInt64(out var parsedAttachmentSize)
+                ? parsedAttachmentSize
+                : 0L;
+
         var createdAt = DateTime.UtcNow;
         if (element.TryGetProperty("created_at", out var createdElement) &&
             createdElement.ValueKind == JsonValueKind.String &&
@@ -804,15 +849,153 @@ internal sealed class MainForm : Form
             createdAt = parsedCreated;
         }
 
-        if (body.Length == 0)
+        if (body.Length == 0 && attachmentTransferId.Length == 0)
             return null;
 
-        return new SupportChatMessage(
-            id,
-            senderType,
-            senderName,
-            body,
-            createdAt);
+        return new SupportChatMessage
+        {
+            ID = id,
+            SenderType = senderType,
+            SenderName = senderName,
+            Body = body,
+            CreatedAt = createdAt,
+            AttachmentTransferID = attachmentTransferId,
+            AttachmentName = attachmentName,
+            AttachmentMime = attachmentMime,
+            AttachmentSize = attachmentSize
+        };
+    }
+
+    private async Task SendChatImageToTechnicianAsync(
+        string path,
+        string caption,
+        CancellationToken ct)
+    {
+        if (!_requestedFileTransfer)
+            throw new InvalidOperationException(
+                "Picture chat requires file-transfer permission.");
+
+        var sessionId = _sessionId ??
+            throw new InvalidOperationException("Session is unavailable.");
+        var token = _agentToken ??
+            throw new InvalidOperationException("Session credential is unavailable.");
+
+        var info = new FileInfo(path);
+        if (!info.Exists)
+            throw new FileNotFoundException("Picture file does not exist.", path);
+        if (info.Length > 10L * 1024 * 1024)
+            throw new InvalidOperationException("Chat pictures are limited to 10 MB.");
+
+        var ext = info.Extension.ToLowerInvariant();
+        var mime = ext switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            _ => throw new InvalidOperationException(
+                "Chat pictures must be JPEG, PNG, or GIF.")
+        };
+
+        SetStatus($"Sending picture {info.Name}…");
+
+        using var file = File.OpenRead(info.FullName);
+        using var content = new MultipartFormDataContent();
+        using var stream = new StreamContent(file);
+        stream.Headers.ContentType = new MediaTypeHeaderValue(mime);
+        content.Add(stream, "file", info.Name);
+        content.Add(new StringContent("chat_image"), "purpose");
+        if (!string.IsNullOrWhiteSpace(caption))
+            content.Add(new StringContent(caption.Trim()), "caption");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            _options.Server + "/api/agent/files?session=" +
+            Uri.EscapeDataString(sessionId));
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", token);
+        request.Content = content;
+
+        using var response = await _http.SendAsync(request, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var err = await response.Content.ReadFromJsonAsync<ErrorResponse>(
+                cancellationToken: ct);
+            throw new InvalidOperationException(
+                err?.Error ?? $"Picture upload failed ({(int)response.StatusCode}).");
+        }
+
+        SetStatus($"Sent picture {info.Name} to technician.");
+    }
+
+    private async Task HydrateChatImageAsync(
+        SupportChatMessage message,
+        CancellationToken ct)
+    {
+        if (!message.HasImage ||
+            message.AttachmentSize <= 0 ||
+            message.AttachmentSize > 10L * 1024 * 1024)
+            return;
+
+        var sessionId = _sessionId;
+        var token = _agentToken;
+        if (string.IsNullOrWhiteSpace(sessionId) ||
+            string.IsNullOrWhiteSpace(token))
+            return;
+
+        try
+        {
+            var url =
+                _options.Server + "/api/agent/files/" +
+                Uri.EscapeDataString(message.AttachmentTransferID) +
+                "?session=" + Uri.EscapeDataString(sessionId);
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await _http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                ct);
+
+            if (!response.IsSuccessStatusCode)
+                return;
+
+            var contentLength = response.Content.Headers.ContentLength;
+            if (contentLength is > 10L * 1024 * 1024)
+                return;
+
+            await using var input = await response.Content.ReadAsStreamAsync(ct);
+            using var output = new MemoryStream(
+                contentLength is > 0 and <= int.MaxValue
+                    ? (int)contentLength.Value
+                    : 0);
+
+            var buffer = new byte[64 * 1024];
+            long total = 0;
+            while (true)
+            {
+                var read = await input.ReadAsync(buffer, ct);
+                if (read <= 0)
+                    break;
+
+                total += read;
+                if (total > 10L * 1024 * 1024)
+                    return;
+
+                output.Write(buffer, 0, read);
+            }
+
+            message.ImageBytes = output.ToArray();
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // The transcript remains useful even when temporary media expired.
+        }
     }
 
     private async Task ResumeElevatedSessionAsync(string resumeFile)
@@ -1050,6 +1233,12 @@ internal sealed class MainForm : Form
 
     private async Task HandleIncomingFileOfferAsync(JsonElement root, CancellationToken ct)
     {
+        var purpose = root.TryGetProperty("purpose", out var purposeElement)
+            ? purposeElement.GetString() ?? ""
+            : "";
+        if (string.Equals(purpose, "chat_image", StringComparison.OrdinalIgnoreCase))
+            return;
+
         if (!root.TryGetProperty("transfer_id", out var idElement)) return;
         var transferId = idElement.GetString() ?? "";
         if (transferId == "") return;
