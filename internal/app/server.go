@@ -270,8 +270,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		CustomerLabel      string `json:"customer_label"`
-		RequestedControl   bool   `json:"requested_control"`
-		RequestedElevation bool   `json:"requested_elevation"`
+		RequestedControl      bool   `json:"requested_control"`
+		RequestedElevation    bool   `json:"requested_elevation"`
+		RequestedClipboard    bool   `json:"requested_clipboard"`
+		RequestedFileTransfer bool   `json:"requested_file_transfer"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -297,7 +299,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		session := Session{
 			ID: id, CodeHint: code[len(code)-4:], CustomerLabel: strings.TrimSpace(req.CustomerLabel),
 			TechnicianName: techName(r.Context()), TechnicianID: &admin.ID, RequestedControl: req.RequestedControl,
-			RequestedElevation: req.RequestedElevation, CreatedAt: now, ExpiresAt: now.Add(s.cfg.SessionTTL),
+			RequestedElevation: req.RequestedElevation, RequestedClipboard: req.RequestedClipboard,
+			RequestedFileTransfer: req.RequestedFileTransfer, CreatedAt: now, ExpiresAt: now.Add(s.cfg.SessionTTL),
 		}
 		err = s.store.CreateSession(r.Context(), session, hmacHex(s.cfg.CodeSecret, code))
 		if err == nil {
@@ -305,7 +308,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			s.store.SetSessionTechnicianID(r.Context(), id, admin.ID)
 			s.store.AddEvent(r.Context(), id, admin.Username, "session_created", "")
 			s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_created", "session", id,
-				auditJSON(map[string]any{"customer_label": session.CustomerLabel, "control": session.RequestedControl, "elevation": session.RequestedElevation}), s.clientIP(r))
+				auditJSON(map[string]any{
+					"customer_label": session.CustomerLabel,
+					"control": session.RequestedControl,
+					"elevation": session.RequestedElevation,
+					"clipboard": session.RequestedClipboard,
+					"file_transfer": session.RequestedFileTransfer,
+				}), s.clientIP(r))
 			writeJSON(w, http.StatusCreated, map[string]any{"session": session, "code": code})
 			return
 		}
@@ -404,7 +413,8 @@ func (s *Server) handleAgentLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": session.ID, "technician_name": session.TechnicianName,
 		"customer_label": session.CustomerLabel, "requested_control": session.RequestedControl,
-		"requested_elevation": session.RequestedElevation, "expires_at": session.ExpiresAt,
+		"requested_elevation": session.RequestedElevation, "requested_clipboard": session.RequestedClipboard,
+		"requested_file_transfer": session.RequestedFileTransfer, "expires_at": session.ExpiresAt,
 	})
 }
 
@@ -623,6 +633,15 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		if envelope.Type == "capture_settings" {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward capture settings session=%s: %v", id, err)
+			}
+			continue
+		}
+		if (envelope.Type == "clipboard_set" || envelope.Type == "clipboard_get") && session.RequestedClipboard {
+			if len(data) > 300*1024 {
+				continue
+			}
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward clipboard session=%s: %v", id, err)
 			}
 		}
 	}
