@@ -93,9 +93,18 @@ internal static class ScreenCapture
                 }
             }
 
-            jpeg = CaptureJpegGdi(screenIndex, quality);
-            backend = "GDI fallback";
-            return true;
+            try
+            {
+                jpeg = CaptureJpegGdi(screenIndex, quality);
+                backend = "GDI fallback";
+                return true;
+            }
+            catch
+            {
+                jpeg = null;
+                backend = "capture unavailable";
+                return false;
+            }
         }
     }
 
