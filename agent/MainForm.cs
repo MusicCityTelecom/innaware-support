@@ -46,6 +46,7 @@ internal sealed class MainForm : Form
     private long _captureWindowSamples;
     private long _captureTelemetryStamp;
     private int _viewerConnected;
+    private int _viewerH264Supported;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
     private bool _closing;
@@ -342,6 +343,7 @@ internal sealed class MainForm : Form
             })
             .ToArray();
 
+        var h264 = H264CapabilityProbe.Current;
         var hello = JsonSerializer.Serialize(new
         {
             type = "hello",
@@ -350,6 +352,8 @@ internal sealed class MainForm : Form
             control = _requestedControl,
             clipboard = _requestedClipboard,
             file_transfer = _requestedFileTransfer,
+            video_transports = h264.Available ? new[] { "jpeg", "h264-annexb" } : new[] { "jpeg" },
+            h264_hardware = h264.Available && h264.Hardware,
             monitors,
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
@@ -540,6 +544,13 @@ internal sealed class MainForm : Form
                 {
                     if (ApplyViewerTelemetry(root))
                         await SendCaptureSettingsAckAsync(ct);
+                }
+                else if (type == "viewer_capabilities")
+                {
+                    var supportsH264 =
+                        root.TryGetProperty("h264_webcodecs", out var h264Element) &&
+                        h264Element.ValueKind == JsonValueKind.True;
+                    Volatile.Write(ref _viewerH264Supported, supportsH264 ? 1 : 0);
                 }
                 else if (type == "clipboard_set" && _requestedClipboard &&
                          root.TryGetProperty("text", out var clipboardTextElement))
@@ -1157,6 +1168,7 @@ internal sealed class MainForm : Form
         Interlocked.Exchange(ref _captureWindowElapsedTicks, 0);
         Interlocked.Exchange(ref _captureWindowSamples, 0);
         Volatile.Write(ref _viewerConnected, 0);
+        Volatile.Write(ref _viewerH264Supported, 0);
         Interlocked.Exchange(ref _reconnectGate, 0);
 
         if (updateUi && !IsDisposed && IsHandleCreated)
