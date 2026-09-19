@@ -247,7 +247,7 @@ internal sealed class DxgiScreenCapture : IDisposable
             scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
             using var graphics = Graphics.FromImage(scaled);
             graphics.CompositingMode = CompositingMode.SourceCopy;
-            graphics.InterpolationMode = InterpolationMode.Bilinear;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
             graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
             graphics.DrawImage(source, new Rectangle(0, 0, width, height));
             output = scaled;
