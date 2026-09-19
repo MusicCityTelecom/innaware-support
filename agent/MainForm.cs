@@ -571,6 +571,21 @@ internal sealed class MainForm : Form
                 {
                     await HandleIncomingFileOfferAsync(root, ct);
                 }
+                else if (type == "file_status" && _requestedFileTransfer)
+                {
+                    var name = root.TryGetProperty("name", out var fileNameElement)
+                        ? Path.GetFileName(fileNameElement.GetString() ?? "file")
+                        : "file";
+                    var status = root.TryGetProperty("status", out var fileStatusElement)
+                        ? fileStatusElement.GetString() ?? "updated"
+                        : "updated";
+                    SetStatus(status switch
+                    {
+                        "available_to_technician" => $"Technician received the offer for {name}.",
+                        "technician_download_started" => $"Technician started downloading {name}.",
+                        _ => $"{name}: {status}"
+                    });
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -648,7 +663,23 @@ internal sealed class MainForm : Form
                 throw new InvalidOperationException(err?.Error ?? $"Upload failed ({(int)response.StatusCode}).");
             }
 
-            SetStatus($"Sent {info.Name} to technician.");
+            var responseText = await response.Content.ReadAsStringAsync();
+            var viewerNotified = false;
+            if (!string.IsNullOrWhiteSpace(responseText))
+            {
+                try
+                {
+                    using var responseJson = JsonDocument.Parse(responseText);
+                    viewerNotified =
+                        responseJson.RootElement.TryGetProperty("viewer_notified", out var notifiedElement) &&
+                        notifiedElement.ValueKind == JsonValueKind.True;
+                }
+                catch { }
+            }
+
+            SetStatus(viewerNotified
+                ? $"Sent {info.Name} to technician."
+                : $"Uploaded {info.Name}. It will appear when the technician viewer is connected.");
         }
         catch (Exception ex)
         {
