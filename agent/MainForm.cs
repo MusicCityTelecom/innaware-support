@@ -23,6 +23,7 @@ internal sealed class MainForm : Form
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _sessionCts;
     private bool _requestedControl;
+    private bool _requestedClipboard;
     private string? _sessionId;
     private string? _agentToken;
     private string? _webSocketUrl;
@@ -166,9 +167,12 @@ internal sealed class MainForm : Form
                 new LookupRequest { Code = code },
                 CancellationToken.None);
 
-            var permissions = lookup.RequestedControl
-                ? "view your screen and control your keyboard and mouse"
-                : "view your screen";
+            var requestedAccess = new List<string> { "view your screen" };
+            if (lookup.RequestedControl)
+                requestedAccess.Add("control your keyboard and mouse");
+            if (lookup.RequestedClipboard)
+                requestedAccess.Add("read and set text in your Windows clipboard");
+            var permissions = string.Join(", ", requestedAccess);
             var elevation = lookup.RequestedElevation
                 ? "\n\nThe technician indicated that Administrator access may be needed. Windows will still require you to approve any UAC elevation prompt locally."
                 : "";
@@ -217,6 +221,7 @@ internal sealed class MainForm : Form
                 CancellationToken.None);
 
             _requestedControl = lookup.RequestedControl;
+            _requestedClipboard = lookup.RequestedClipboard;
             await ConnectWebSocketAsync(
                 redeem.WebSocketUrl,
                 redeem.AgentToken,
@@ -315,6 +320,7 @@ internal sealed class MainForm : Form
             machine_name = Environment.MachineName,
             elevated = Program.IsAdministrator(),
             control = _requestedControl,
+            clipboard = _requestedClipboard,
             monitors,
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
@@ -417,6 +423,33 @@ internal sealed class MainForm : Form
                 {
                     ApplyViewerStatus(connectedElement.GetBoolean());
                 }
+                else if (type == "clipboard_set" && _requestedClipboard &&
+                         root.TryGetProperty("text", out var clipboardTextElement))
+                {
+                    var text = clipboardTextElement.GetString() ?? "";
+                    if (text.Length <= 262144)
+                    {
+                        await SetClipboardTextAsync(text);
+                        await SendTextAsync(JsonSerializer.Serialize(new
+                        {
+                            type = "clipboard_status",
+                            action = "set",
+                            ok = true,
+                            length = text.Length
+                        }), ct);
+                    }
+                }
+                else if (type == "clipboard_get" && _requestedClipboard)
+                {
+                    var text = await GetClipboardTextAsync();
+                    if (text.Length > 262144) text = text[..262144];
+                    await SendTextAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "clipboard_data",
+                        text,
+                        length = text.Length
+                    }), ct);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -425,6 +458,58 @@ internal sealed class MainForm : Form
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
+    }
+
+    private Task<string> GetClipboardTextAsync()
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (IsDisposed || !IsHandleCreated)
+        {
+            tcs.SetResult("");
+            return tcs.Task;
+        }
+
+        BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                var text = Clipboard.ContainsText(TextDataFormat.UnicodeText)
+                    ? Clipboard.GetText(TextDataFormat.UnicodeText)
+                    : "";
+                tcs.SetResult(text);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        }));
+
+        return tcs.Task;
+    }
+
+    private Task SetClipboardTextAsync(string text)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (IsDisposed || !IsHandleCreated)
+        {
+            tcs.SetResult();
+            return tcs.Task;
+        }
+
+        BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                Clipboard.SetDataObject(text, true, 5, 100);
+                tcs.SetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        }));
+
+        return tcs.Task;
     }
 
     private void ApplyViewerStatus(bool connected)
