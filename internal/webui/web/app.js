@@ -254,7 +254,7 @@ $('sessionForm').addEventListener('submit', async event => {
         customer_label:$('customerLabel').value,
         requested_control:$('requestControl').checked,
         requested_clipboard:$('requestClipboard').checked,
-        requested_file_transfer:false,
+        requested_file_transfer:$('requestFileTransfer').checked,
         requested_elevation:$('requestElevation').checked
       }
     });
@@ -265,6 +265,7 @@ $('sessionForm').addEventListener('submit', async event => {
     $('customerLabel').value='';
     $('requestControl').checked=true;
     $('requestClipboard').checked=true;
+    $('requestFileTransfer').checked=true;
     $('requestElevation').checked=false;
     await Promise.all([loadMetrics(), loadSessions()]);
   } catch (e) { $('sessionError').textContent=e.message; }
@@ -297,6 +298,10 @@ async function openViewer(id) {
     $('endSessionButton').classList.toggle('hidden', !active);
     $('viewerControls').classList.toggle('hidden', !active);
     show('clipboardCard', active && !!state.session.requested_clipboard);
+    show('fileTransferCard', active && !!state.session.requested_file_transfer);
+    $('sendFileInput').value='';
+    $('incomingFiles').textContent='';
+    $('fileTransferStatus').textContent='No active transfer.';
     $('remoteClipboardText').value='';
     $('clipboardStatus').textContent='Clipboard idle.';
     $('copyRemoteClipboardButton').disabled=true;
@@ -356,6 +361,7 @@ function renderSessionDetail() {
     ['Duration', escapeHTML(duration)],
     ['Control', s.requested_control ? 'Requested' : 'View only'],
     ['Clipboard', s.requested_clipboard ? 'Enabled' : 'No'],
+    ['File transfer', s.requested_file_transfer ? 'Enabled' : 'No'],
     ['Elevation', s.requested_elevation ? 'May be needed' : 'No']
   ].map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   renderNotes();
@@ -419,6 +425,14 @@ function connectViewerWS(id){
             ? 'Remote clipboard operation failed.'
             : `Remote clipboard updated (${Number(msg.length)||0} characters).`;
         }
+        if(msg.type==='file_offer' && msg.direction==='to_tech'){
+          addIncomingFile(msg);
+        }
+        if(msg.type==='file_status'){
+          const name=msg.name?String(msg.name):'file';
+          const status=msg.status?String(msg.status):'updated';
+          $('fileTransferStatus').textContent=`${name}: ${status}`;
+        }
       }catch{}
       return;
     }
@@ -456,7 +470,7 @@ function applyAgentHello(msg){
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
-  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}`;
+  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
 }
 
 function applyCaptureSettingsAck(msg){
@@ -561,6 +575,64 @@ $('copyRemoteClipboardButton').addEventListener('click',async()=>{
     $('clipboardStatus').textContent=`Copied ${(state.remoteClipboard||'').length.toLocaleString()} remote characters to local clipboard.`;
   }catch(e){
     $('clipboardStatus').textContent='Could not write local clipboard: '+e.message;
+  }
+});
+
+function formatBytes(value){
+  const n=Number(value)||0;
+  if(n<1024)return `${n} B`;
+  if(n<1024*1024)return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/(1024*1024)).toFixed(2)} MB`;
+}
+
+function addIncomingFile(msg){
+  if(!state.session||!state.session.requested_file_transfer)return;
+  const transferId=String(msg.transfer_id||'');
+  if(!transferId)return;
+  const name=String(msg.name||'support-file.bin');
+  const row=document.createElement('div');
+  row.className='incoming-file';
+  const strong=document.createElement('strong');
+  strong.textContent=name;
+  const meta=document.createElement('span');
+  meta.textContent=`${formatBytes(msg.size)} · available until ${formatDate(msg.expires_at)}`;
+  const link=document.createElement('a');
+  link.href=`/api/sessions/${encodeURIComponent(state.session.id)}/files/${encodeURIComponent(transferId)}`;
+  link.textContent='Download from customer';
+  link.setAttribute('download',name);
+  row.append(strong,meta,link);
+  $('incomingFiles').prepend(row);
+  $('fileTransferStatus').textContent=`Customer offered ${name}.`;
+}
+
+$('sendFileButton').addEventListener('click',async()=>{
+  if(!state.session?.requested_file_transfer)return;
+  const file=$('sendFileInput').files?.[0];
+  if(!file){
+    $('fileTransferStatus').textContent='Choose a file first.';
+    return;
+  }
+  if(file.size>25*1024*1024){
+    $('fileTransferStatus').textContent='File exceeds the 25 MB limit.';
+    return;
+  }
+  const form=new FormData();
+  form.append('file',file,file.name);
+  $('sendFileButton').disabled=true;
+  $('fileTransferStatus').textContent=`Uploading ${file.name} (${formatBytes(file.size)})…`;
+  try{
+    const response=await fetch(
+      `/api/sessions/${encodeURIComponent(state.session.id)}/files`,
+      {method:'POST',body:form,credentials:'same-origin'}
+    );
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||`Upload failed (${response.status})`);
+    $('fileTransferStatus').textContent=`Offered ${file.name} to customer. Waiting for their save decision.`;
+    $('sendFileInput').value='';
+  }catch(e){
+    $('fileTransferStatus').textContent=e.message;
+  }finally{
+    $('sendFileButton').disabled=false;
   }
 });
 
