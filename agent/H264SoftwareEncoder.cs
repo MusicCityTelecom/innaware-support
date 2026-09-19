@@ -296,11 +296,11 @@ internal sealed class H264SoftwareEncoder : IDisposable
         SetVideoType(output, VideoFormatGuids.H264, width, height, fps);
         output.Set(MediaTypeAttributeKeys.AvgBitrate, checked((uint)bitrate)).CheckError();
         output.Set(MediaTypeAttributeKeys.Mpeg2Profile, checked((uint)BaselineProfile)).CheckError();
-        transform.SetOutputType(0, output, 0).CheckError();
+        transform.SetOutputType(0, output, 0);
 
         using var input = MediaFactory.MFCreateMediaType();
         SetVideoType(input, VideoFormatGuids.NV12, width, height, fps);
-        transform.SetInputType(0, input, 0).CheckError();
+        transform.SetInputType(0, input, 0);
     }
 
     private static void SetVideoType(
