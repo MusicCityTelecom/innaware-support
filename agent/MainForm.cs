@@ -738,11 +738,32 @@ internal sealed class MainForm : Form
                 items.Add(parsed);
         }
 
-        foreach (var item in items)
+        const int maxHistoryImages = 20;
+        const long maxHistoryImageBytes = 50L * 1024 * 1024;
+        var hydratedImages = 0;
+        long hydratedBytes = 0;
+
+        for (var i = items.Count - 1; i >= 0; i--)
         {
             if (ct.IsCancellationRequested)
                 break;
+
+            var item = items[i];
+            if (!item.HasImage)
+                continue;
+            if (hydratedImages >= maxHistoryImages)
+                break;
+            if (item.AttachmentSize <= 0 ||
+                item.AttachmentSize > 10L * 1024 * 1024 ||
+                hydratedBytes + item.AttachmentSize > maxHistoryImageBytes)
+                continue;
+
             await HydrateChatImageAsync(item, ct);
+            if (item.ImageBytes is { Length: > 0 })
+            {
+                hydratedImages++;
+                hydratedBytes += item.ImageBytes.Length;
+            }
         }
 
         _chatMessages.Clear();
