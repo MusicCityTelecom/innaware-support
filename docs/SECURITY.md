@@ -19,6 +19,7 @@ This repository contains remote-support software. Treat code signing, release in
 - The Go service listens on loopback by default and is exposed through Apache HTTPS/WSS.
 - The broker does not intentionally persist remote screen frames.
 - Screen capture pauses when no technician viewer is attached, reducing unnecessary relay exposure and bandwidth.
+- Experimental H.264 is capability-negotiated and technician-selected; JPEG remains the default/fallback, and codec failure does not change session permissions or persist remote frames.
 - Clipboard text access is an explicit per-session permission and is capped at 256 KB per message.
 - File transfer is an explicit per-session permission; each file is capped at 25 MB, stored only in the service's private temporary directory, and expires after 30 minutes.
 - Customer-side file receive requires a confirmation prompt and Save File dialog; customer-side file send requires an Open File dialog.
