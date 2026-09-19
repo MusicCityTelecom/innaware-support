@@ -7,6 +7,9 @@ const state = {
   frameWindowStart: 0, frameCount: 0, frameBytes: 0,
   renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
   frameDecodeBusy: false, pendingFrame: null,
+  h264Decoder: null, h264BrowserSupported: false,
+  h264AgentEligible: false, h264DecodeStarts: new Map(),
+  videoTransport: 'jpeg',
   viewMode: 'fit', remoteClipboard: '',
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
@@ -402,6 +405,7 @@ function connectViewerWS(id){
   ws.onopen=()=>{
     setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
     $('viewerCaptureState').textContent='Waiting for customer capture settings';
+    void sendViewerCapabilities(ws);
     if(state.session?.requested_file_transfer) void loadPendingCustomerFiles();
   };
   ws.onclose=()=>{if(state.ws===ws)setViewerStatus('disconnected');};
@@ -443,7 +447,7 @@ function connectViewerWS(id){
       }catch{}
       return;
     }
-    queueRemoteFrame(event.data);
+    handleRemoteBinaryFrame(event.data);
   };
 }
 
