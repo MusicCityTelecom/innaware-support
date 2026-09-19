@@ -69,6 +69,32 @@ func (s *Server) sendChatHistoryToPeer(
 	_ = peer.write(websocket.TextMessage, chatHistoryEnvelope(messages))
 }
 
+func (s *Server) createChatImageMessage(
+	ctx context.Context,
+	sessionID, senderType, senderName, caption string,
+	item FileTransfer,
+) (ChatMessage, error) {
+	caption = strings.TrimSpace(caption)
+	if caption == "" {
+		caption = "Shared image: " + item.Name
+	}
+	body, err := normalizeChatBody(caption)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	return s.store.AddChatMessageAttachment(
+		ctx,
+		sessionID,
+		senderType,
+		strings.TrimSpace(senderName),
+		body,
+		item.ID,
+		item.Name,
+		item.MimeType,
+		item.Size,
+	)
+}
+
 func (s *Server) createChatMessage(
 	ctx context.Context,
 	sessionID, senderType, senderName, body string,
