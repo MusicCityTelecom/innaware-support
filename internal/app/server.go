@@ -549,10 +549,11 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	viewerConnected := s.hub.hasTech(id)
 	_ = peer.write(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"viewer_status","connected":%t}`, viewerConnected)))
 	defer func() {
-		s.hub.unsetAgent(id, peer)
-		_ = s.store.MarkAgentDisconnected(context.Background(), id)
-		s.store.AddEvent(context.Background(), id, "system", "agent_disconnected", "")
-		_ = s.hub.sendToTech(id, websocket.TextMessage, []byte(`{"type":"agent_status","status":"disconnected"}`))
+		if s.hub.unsetAgent(id, peer) {
+			_ = s.store.MarkAgentDisconnected(context.Background(), id)
+			s.store.AddEvent(context.Background(), id, "system", "agent_disconnected", "")
+			_ = s.hub.sendToTech(id, websocket.TextMessage, []byte(`{"type":"agent_status","status":"disconnected"}`))
+		}
 		_ = conn.Close()
 	}()
 	_ = s.store.MarkAgentConnected(r.Context(), id)
