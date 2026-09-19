@@ -55,6 +55,9 @@ internal sealed class ChatForm : Form
 
         FormClosing += (_, e) =>
         {
+            if (e.CloseReason != CloseReason.UserClosing)
+                return;
+
             e.Cancel = true;
             Hide();
         };
