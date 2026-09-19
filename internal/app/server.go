@@ -546,6 +546,8 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	if old := s.hub.setAgent(id, peer); old != nil {
 		old.close(websocket.ClosePolicyViolation, "replaced by new customer connection")
 	}
+	viewerConnected := s.hub.hasTech(id)
+	_ = peer.write(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"viewer_status","connected":%t}`, viewerConnected)))
 	defer func() {
 		s.hub.unsetAgent(id, peer)
 		_ = s.store.MarkAgentDisconnected(context.Background(), id)
@@ -588,8 +590,11 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 	if old := s.hub.setTech(id, peer); old != nil {
 		old.close(websocket.ClosePolicyViolation, "replaced by new technician connection")
 	}
+	_ = s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"viewer_status","connected":true}`))
 	defer func() {
-		s.hub.unsetTech(id, peer)
+		if s.hub.unsetTech(id, peer) {
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"viewer_status","connected":false}`))
+		}
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
