@@ -112,13 +112,16 @@ jobs:
           $output = (Resolve-Path dist/installer).Path
           & $iscc "/DPublishDir=$publish" "/DOutputDir=$output" technician/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit $LASTEXITCODE" }
-          Get-FileHash dist/installer/InnAware-Support-Technician-Setup.exe -Algorithm SHA256 | Format-List
+          $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
+          if (-not (Test-Path $installer)) { throw "Technician installer was not created." }
+          Copy-Item $installer dist/InnAware-Support-Technician-Setup.exe -Force
+          Get-FileHash dist/InnAware-Support-Technician-Setup.exe -Algorithm SHA256 | Format-List
       - uses: actions/upload-artifact@v4
         with:
           name: InnAware-Support-Technician-Windows-x64
           path: |
             dist/InnAware-Support-Technician-Portable.zip
-            dist/installer/InnAware-Support-Technician-Setup.exe
+            dist/InnAware-Support-Technician-Setup.exe
 
   preview-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
