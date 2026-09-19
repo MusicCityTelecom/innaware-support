@@ -934,4 +934,9 @@ setInterval(()=>{
   if(state.activeTab==='sessions'){loadMetrics();loadSessions();}
 },5000);
 
+setInterval(()=>{
+  if(!state.session||!state.ws||state.ws.readyState!==WebSocket.OPEN)return;
+  updateViewerFrameTelemetry();
+},1000);
+
 bootstrap();
