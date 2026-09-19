@@ -309,6 +309,7 @@ async function openViewer(id) {
     $('viewerControls').classList.toggle('hidden', !active);
     show('clipboardCard', active && !!state.session.requested_clipboard);
     show('fileTransferCard', active && !!state.session.requested_file_transfer);
+    $('chatImageButton').disabled=!(active && !!state.session.requested_file_transfer);
     $('sendFileInput').value='';
     $('incomingFiles').textContent='';
     $('fileTransferStatus').textContent='No active transfer.';
@@ -811,11 +812,30 @@ function renderChatMessages(){
   }
   box.innerHTML=state.chatMessages.map(m=>{
     const sender=String(m.sender_type||'customer');
+    const transferId=String(m.attachment_transfer_id||'');
+    const mime=String(m.attachment_mime||'');
+    const name=String(m.attachment_name||'image');
+    let attachment='';
+    if(transferId&&/^image\/(jpeg|png|gif)$/i.test(mime)&&state.session){
+      const src=`/api/sessions/${encodeURIComponent(state.session.id)}/files/${encodeURIComponent(transferId)}`;
+      attachment=`<a class="chat-image-link" href="${escapeHTML(src)}" target="_blank" rel="noopener">
+        <img class="chat-image" src="${escapeHTML(src)}" alt="${escapeHTML(name)}">
+      </a><span class="chat-image-expired hidden">Picture expired or is no longer available · ${escapeHTML(name)}</span>`;
+    }
     return `<div class="chat-message ${sender==='technician'?'technician':'customer'}">
       <div class="chat-meta"><strong>${escapeHTML(m.sender_name||sender)}</strong><span>${escapeHTML(formatDate(m.created_at))}</span></div>
       <div class="chat-body">${escapeHTML(m.body||'')}</div>
+      ${attachment}
     </div>`;
   }).join('');
+  box.querySelectorAll('.chat-image').forEach(img=>{
+    img.addEventListener('error',()=>{
+      const link=img.closest('.chat-image-link');
+      const expired=link?.nextElementSibling;
+      if(link)link.classList.add('hidden');
+      if(expired)expired.classList.remove('hidden');
+    },{once:true});
+  });
   box.scrollTop=box.scrollHeight;
 }
 
@@ -834,6 +854,55 @@ $('chatBody').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){
     e.preventDefault();
     $('chatForm').requestSubmit();
+  }
+});
+
+$('chatImageButton').addEventListener('click',()=>{
+  if(!state.session?.requested_file_transfer){
+    $('chatStatus').textContent='Picture chat requires file-transfer permission for this session.';
+    return;
+  }
+  $('chatImageInput').click();
+});
+
+$('chatImageInput').addEventListener('change',async()=>{
+  const input=$('chatImageInput');
+  const file=input.files?.[0];
+  if(!file||!state.session)return;
+
+  if(!['image/jpeg','image/png','image/gif'].includes(file.type)){
+    $('chatStatus').textContent='Chat pictures must be JPEG, PNG, or GIF.';
+    input.value='';
+    return;
+  }
+  if(file.size>10*1024*1024){
+    $('chatStatus').textContent='Chat pictures are limited to 10 MB.';
+    input.value='';
+    return;
+  }
+
+  const form=new FormData();
+  form.append('file',file,file.name);
+  form.append('purpose','chat_image');
+  const caption=$('chatBody').value.trim();
+  if(caption)form.append('caption',caption);
+
+  $('chatImageButton').disabled=true;
+  $('chatStatus').textContent=`Sending picture ${file.name}…`;
+  try{
+    const response=await fetch(
+      `/api/sessions/${encodeURIComponent(state.session.id)}/files`,
+      {method:'POST',body:form,credentials:'same-origin'}
+    );
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||`Picture upload failed (${response.status})`);
+    $('chatBody').value='';
+    $('chatStatus').textContent='Picture sent.';
+  }catch(e){
+    $('chatStatus').textContent=e.message;
+  }finally{
+    input.value='';
+    $('chatImageButton').disabled=!state.session?.requested_file_transfer;
   }
 });
 
@@ -1011,6 +1080,7 @@ async function loadPendingCustomerFiles(){
 
 function addIncomingFile(msg,ack=true){
   if(!state.session||!state.session.requested_file_transfer)return;
+  if(String(msg.purpose||'')==='chat_image')return;
   const transferId=String(msg.transfer_id||'');
   if(!transferId)return;
   if([...$('incomingFiles').children].some(row=>row.dataset.transferId===transferId)){
