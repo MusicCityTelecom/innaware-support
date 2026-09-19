@@ -114,7 +114,7 @@ func (s *Server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="innaware-support-history.csv"`)
 	w.Header().Set("Cache-Control", "no-store")
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"session_id", "customer", "machine", "technician", "status", "created_utc", "connected_utc", "ended_utc", "control", "elevation"})
+	_ = cw.Write([]string{"session_id", "customer", "machine", "technician", "status", "created_utc", "connected_utc", "ended_utc", "control", "clipboard", "file_transfer", "elevation"})
 	for _, x := range result.Sessions {
 		connected, ended := "", ""
 		if x.ConnectedAt != nil {
@@ -125,7 +125,7 @@ func (s *Server) handleSessionExport(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = cw.Write([]string{x.ID, x.CustomerLabel, x.MachineName, x.TechnicianName, x.Status,
 			x.CreatedAt.UTC().Format(time.RFC3339), connected, ended,
-			strconv.FormatBool(x.RequestedControl), strconv.FormatBool(x.RequestedElevation)})
+			strconv.FormatBool(x.RequestedControl), strconv.FormatBool(x.RequestedClipboard), strconv.FormatBool(x.RequestedFileTransfer), strconv.FormatBool(x.RequestedElevation)})
 	}
 	cw.Flush()
 	admin := currentAdmin(r.Context())
