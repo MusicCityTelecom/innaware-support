@@ -160,13 +160,13 @@ internal sealed class H264SoftwareEncoder : IDisposable
         if (_sequenceHeader is null)
             _sequenceHeader = ReadSequenceHeader();
 
-        var annexB = NormalizeAnnexB(encoded.Value.Data);
-        var keyFrame = encoded.Value.KeyFrame || ContainsNalType(annexB, 5);
+        var annexB = H264AnnexB.Normalize(encoded.Value.Data);
+        var keyFrame = encoded.Value.KeyFrame || H264AnnexB.ContainsNalType(annexB, 5);
 
         if (keyFrame && _sequenceHeader is { Length: > 0 } header &&
-            (!ContainsNalType(annexB, 7) || !ContainsNalType(annexB, 8)))
+            (!H264AnnexB.ContainsNalType(annexB, 7) || !H264AnnexB.ContainsNalType(annexB, 8)))
         {
-            var normalizedHeader = NormalizeAnnexB(header);
+            var normalizedHeader = H264AnnexB.Normalize(header);
             var combined = new byte[normalizedHeader.Length + annexB.Length];
             Buffer.BlockCopy(normalizedHeader, 0, combined, 0, normalizedHeader.Length);
             Buffer.BlockCopy(annexB, 0, combined, normalizedHeader.Length, annexB.Length);
@@ -439,71 +439,6 @@ internal sealed class H264SoftwareEncoder : IDisposable
             GraphicsUnit.Pixel);
 
         return copy;
-    }
-
-    private static byte[] NormalizeAnnexB(byte[] data)
-    {
-        if (data.Length < 4)
-            return data;
-
-        if (HasStartCode(data, 0))
-            return data;
-
-        var output = new MemoryStream(data.Length + 64);
-        var offset = 0;
-        while (offset + 4 <= data.Length)
-        {
-            var length =
-                (data[offset] << 24) |
-                (data[offset + 1] << 16) |
-                (data[offset + 2] << 8) |
-                data[offset + 3];
-
-            offset += 4;
-            if (length <= 0 || offset + length > data.Length)
-                return data;
-
-            output.Write([0, 0, 0, 1]);
-            output.Write(data, offset, length);
-            offset += length;
-        }
-
-        return offset == data.Length ? output.ToArray() : data;
-    }
-
-    private static bool ContainsNalType(byte[] data, int wantedType)
-    {
-        for (var i = 0; i + 4 < data.Length; i++)
-        {
-            var startLength = 0;
-            if (i + 4 < data.Length &&
-                data[i] == 0 && data[i + 1] == 0 &&
-                data[i + 2] == 0 && data[i + 3] == 1)
-                startLength = 4;
-            else if (
-                data[i] == 0 && data[i + 1] == 0 &&
-                data[i + 2] == 1)
-                startLength = 3;
-
-            if (startLength == 0)
-                continue;
-
-            var nalIndex = i + startLength;
-            if (nalIndex < data.Length &&
-                (data[nalIndex] & 0x1F) == wantedType)
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool HasStartCode(byte[] data, int offset)
-    {
-        return offset + 3 < data.Length &&
-               data[offset] == 0 &&
-               data[offset + 1] == 0 &&
-               (data[offset + 2] == 1 ||
-                (data[offset + 2] == 0 && data[offset + 3] == 1));
     }
 
     public void Dispose()
