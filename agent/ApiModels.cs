@@ -29,6 +29,12 @@ internal sealed class RedeemResponse
     [JsonPropertyName("session_id")] public string SessionId { get; set; } = "";
     [JsonPropertyName("agent_token")] public string AgentToken { get; set; } = "";
     [JsonPropertyName("websocket_url")] public string WebSocketUrl { get; set; } = "";
+    [JsonPropertyName("live_expires_at")] public DateTime LiveExpiresAt { get; set; }
+}
+
+internal sealed class EndSessionRequest
+{
+    [JsonPropertyName("session_id")] public string SessionId { get; set; } = "";
 }
 
 internal sealed class ErrorResponse
