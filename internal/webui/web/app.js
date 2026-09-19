@@ -463,7 +463,6 @@ function applyAgentHello(msg){
   state.activeMonitor=Number.isInteger(msg.active_monitor)?msg.active_monitor:0;
   select.value=String(state.activeMonitor);
   if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
-  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.adaptive_fps) $('fpsSelect').value='0';
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
@@ -478,6 +477,7 @@ function applyCaptureSettingsAck(msg){
     state.activeMonitor=msg.active_monitor;
     $('monitorSelect').value=String(msg.active_monitor);
   }
+  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.adaptive_fps) $('fpsSelect').value='0';
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
