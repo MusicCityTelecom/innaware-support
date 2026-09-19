@@ -373,11 +373,11 @@ internal sealed class H264SoftwareEncoder : IDisposable
             var height = rgba.Height;
             var ySize = width * height;
             var output = new byte[ySize + ySize / 2];
-            var srcBase = (byte*)data.Scan0;
+            var srcBase = data.Scan0;
 
             Parallel.For(0, height, y =>
             {
-                var row = srcBase + y * data.Stride;
+                var row = (byte*)srcBase + y * data.Stride;
                 var yRow = y * width;
                 for (var x = 0; x < width; x++)
                 {
@@ -393,8 +393,8 @@ internal sealed class H264SoftwareEncoder : IDisposable
             Parallel.For(0, height / 2, yHalf =>
             {
                 var y = yHalf * 2;
-                var row0 = srcBase + y * data.Stride;
-                var row1 = srcBase + Math.Min(y + 1, height - 1) * data.Stride;
+                var row0 = (byte*)srcBase + y * data.Stride;
+                var row1 = (byte*)srcBase + Math.Min(y + 1, height - 1) * data.Stride;
                 var uvRow = ySize + yHalf * width;
 
                 for (var x = 0; x < width; x += 2)
