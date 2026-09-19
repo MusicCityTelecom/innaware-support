@@ -9,7 +9,7 @@ const state = {
   frameDecodeBusy: false, pendingFrame: null,
   viewMode: 'fit', remoteClipboard: '',
   network: null, chatMessages: [],
-  recorder: null, recorderChunks: [], recorderStartedAt: null,
+  recorder: null, recorderChunks: [], recorderStartedAt: null, recorderDownload: true,
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -344,7 +344,7 @@ function resetViewerCanvas() {
   ph.querySelector('span').textContent = 'The remote screen will appear after the customer enters the session code and approves access.';
 }
 function closeViewer(){
-  stopViewerRecording(false);
+  stopViewerRecording(true);
   if(state.ws){state.ws.close();state.ws=null;}
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   const popout = new URLSearchParams(location.search).get('popout') === '1';
@@ -894,7 +894,7 @@ function stopViewerRecording(download=true){
   const recorder=state.recorder;
   if(!recorder)return;
   state.recorder=null;
-  recorder._downloadResult=download;
+  state.recorderDownload=download;
   try{recorder.stop();}catch{}
   $('recordViewerButton').textContent='Record';
   $('recordViewerButton').classList.remove('recording');
@@ -903,7 +903,13 @@ function stopViewerRecording(download=true){
 
 function finishViewerRecording(mimeType){
   const chunks=state.recorderChunks.splice(0);
-  if(!chunks.length)return;
+  const shouldDownload=state.recorderDownload;
+  state.recorderDownload=true;
+  const recorderStream=state.recorder?.stream;
+  if(recorderStream){
+    for(const track of recorderStream.getTracks())track.stop();
+  }
+  if(!chunks.length||!shouldDownload)return;
   const blob=new Blob(chunks,{type:mimeType});
   const started=state.recorderStartedAt||new Date();
   state.recorderStartedAt=null;
