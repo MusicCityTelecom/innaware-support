@@ -58,6 +58,7 @@ internal static class ScreenCapture
         int screenIndex,
         long quality,
         int timeoutMs,
+        bool forceGdi,
         out byte[]? jpeg,
         out string backend)
     {
@@ -65,7 +66,7 @@ internal static class ScreenCapture
 
         lock (CaptureLock)
         {
-            if (DateTime.UtcNow >= _dxgiRetryAfterUtc)
+            if (!forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
             {
                 try
                 {
@@ -96,7 +97,7 @@ internal static class ScreenCapture
             try
             {
                 jpeg = CaptureJpegGdi(screenIndex, quality);
-                backend = "GDI fallback";
+                backend = forceGdi ? "GDI compatibility" : "GDI fallback";
                 return true;
             }
             catch
