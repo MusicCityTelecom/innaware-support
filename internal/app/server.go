@@ -26,6 +26,7 @@ type Server struct {
 	cfg          Config
 	store        *Store
 	hub          *Hub
+	transfers    *TransferStore
 	mux          *http.ServeMux
 	agentLimiter *limiter
 	loginLimiter *limiter
@@ -37,6 +38,7 @@ func NewServer(cfg Config, store *Store) *Server {
 		cfg:          cfg,
 		store:        store,
 		hub:          NewHub(),
+		transfers:    NewTransferStore(),
 		mux:          http.NewServeMux(),
 		agentLimiter: newLimiter(12, 10*time.Minute),
 		loginLimiter: newLimiter(10, 15*time.Minute),
@@ -69,6 +71,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.requireTech(s.handleGetSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
+	s.mux.HandleFunc("POST /api/sessions/{id}/files", s.requireTech(s.handleTechFileUpload))
+	s.mux.HandleFunc("GET /api/sessions/{id}/files/{transfer}", s.requireTech(s.handleTechFileDownload))
 	s.mux.HandleFunc("GET /api/admins", s.requireAdminRole(s.handleListAdmins))
 	s.mux.HandleFunc("POST /api/admins", s.requireAdminRole(s.handleCreateAdmin))
 	s.mux.HandleFunc("PATCH /api/admins/{id}", s.requireAdminRole(s.handleUpdateAdmin))
@@ -77,6 +81,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agent/lookup", s.handleAgentLookup)
 	s.mux.HandleFunc("POST /api/agent/redeem", s.handleAgentRedeem)
 	s.mux.HandleFunc("POST /api/agent/end", s.handleAgentEnd)
+	s.mux.HandleFunc("POST /api/agent/files", s.handleAgentFileUpload)
+	s.mux.HandleFunc("GET /api/agent/files/{transfer}", s.handleAgentFileDownload)
 	s.mux.HandleFunc("GET /api/download-status", s.handleDownloadStatus)
 	s.mux.HandleFunc("GET /download/windows", s.handleAgentDownload)
 	s.mux.HandleFunc("GET /ws/agent", s.handleAgentWS)
@@ -375,6 +381,7 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
 	s.store.AddEvent(r.Context(), id, admin.Username, "session_ended", "")
 	s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_ended", "session", id, "", s.clientIP(r))
 	s.hub.End(id)
+	s.transfers.RemoveSession(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -497,6 +504,7 @@ func (s *Server) handleAgentEnd(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.AddEvent(r.Context(), req.SessionID, "customer", "session_ended", "customer ended support session")
 	s.hub.End(req.SessionID)
+	s.transfers.RemoveSession(req.SessionID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
