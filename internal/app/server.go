@@ -672,6 +672,22 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if envelope.Type == "viewer_telemetry" {
+			if len(data) <= 16*1024 {
+				if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+					log.Printf("forward viewer telemetry session=%s: %v", id, err)
+				}
+			}
+			continue
+		}
+		if envelope.Type == "viewer_capabilities" {
+			if len(data) <= 4*1024 {
+				if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+					log.Printf("forward viewer capabilities session=%s: %v", id, err)
+				}
+			}
+			continue
+		}
 		if envelope.Type == "clipboard_get" && session.RequestedClipboard {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward clipboard request session=%s: %v", id, err)

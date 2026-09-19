@@ -32,7 +32,10 @@ internal sealed class MainForm : Form
     private DateTime _liveExpiresAtUtc;
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
+    private int _scalePercent = 100;
     private int _fps = 6;
+    private int _adaptiveFpsEnabled;
+    private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
@@ -43,6 +46,7 @@ internal sealed class MainForm : Form
     private long _captureWindowSamples;
     private long _captureTelemetryStamp;
     private int _viewerConnected;
+    private int _viewerH264Supported;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
     private bool _closing;
@@ -339,6 +343,7 @@ internal sealed class MainForm : Form
             })
             .ToArray();
 
+        var h264 = H264CapabilityProbe.Current;
         var hello = JsonSerializer.Serialize(new
         {
             type = "hello",
@@ -347,10 +352,14 @@ internal sealed class MainForm : Form
             control = _requestedControl,
             clipboard = _requestedClipboard,
             file_transfer = _requestedFileTransfer,
+            video_transports = h264.Available ? new[] { "jpeg", "h264-annexb" } : new[] { "jpeg" },
+            h264_hardware = h264.Available && h264.Hardware,
             monitors,
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
+            scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
+            adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode),
             live_expires_at = _liveExpiresAtUtc
         });
@@ -375,6 +384,7 @@ internal sealed class MainForm : Form
 
                 var monitorIndex = Volatile.Read(ref _monitorIndex);
                 var quality = Volatile.Read(ref _jpegQuality);
+                var scalePercent = Volatile.Read(ref _scalePercent);
                 var fps = Math.Clamp(Volatile.Read(ref _fps), 1, 12);
                 var framePeriodMs = Math.Max(1, 1000 / fps);
                 var captureMode = Volatile.Read(ref _captureMode);
@@ -384,6 +394,7 @@ internal sealed class MainForm : Form
                     monitorIndex,
                     quality,
                     framePeriodMs,
+                    scalePercent,
                     captureMode == "gdi",
                     out var frame,
                     out var backend);
@@ -528,6 +539,18 @@ internal sealed class MainForm : Form
                          (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
                 {
                     ApplyViewerStatus(connectedElement.GetBoolean());
+                }
+                else if (type == "viewer_telemetry")
+                {
+                    if (ApplyViewerTelemetry(root))
+                        await SendCaptureSettingsAckAsync(ct);
+                }
+                else if (type == "viewer_capabilities")
+                {
+                    var supportsH264 =
+                        root.TryGetProperty("h264_webcodecs", out var h264Element) &&
+                        h264Element.ValueKind == JsonValueKind.True;
+                    Volatile.Write(ref _viewerH264Supported, supportsH264 ? 1 : 0);
                 }
                 else if (type == "clipboard_set" && _requestedClipboard &&
                          root.TryGetProperty("text", out var clipboardTextElement))
@@ -853,8 +876,37 @@ internal sealed class MainForm : Form
             Volatile.Write(ref _jpegQuality, nextQuality);
         }
 
+        if (root.TryGetProperty("scale_percent", out var scaleElement) && scaleElement.TryGetInt32(out var scalePercent))
+        {
+            var nextScale = scalePercent switch
+            {
+                <= 50 => 50,
+                <= 75 => 75,
+                _ => 100
+            };
+            if (nextScale != Volatile.Read(ref _scalePercent))
+                _lastSentFrame = null;
+            Volatile.Write(ref _scalePercent, nextScale);
+        }
+
+        var adaptive = root.TryGetProperty("adaptive_fps", out var adaptiveElement) &&
+                       adaptiveElement.ValueKind == JsonValueKind.True;
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
-            Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
+        {
+            if (adaptive || fps == 0)
+            {
+                Volatile.Write(ref _adaptiveFpsEnabled, 1);
+                var current = Volatile.Read(ref _fps);
+                if (current < 2 || current > 12)
+                    Volatile.Write(ref _fps, 8);
+                Interlocked.Exchange(ref _adaptiveFpsLastAdjust, 0);
+            }
+            else
+            {
+                Volatile.Write(ref _adaptiveFpsEnabled, 0);
+                Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
+            }
+        }
 
         if (root.TryGetProperty("capture_mode", out var modeElement))
         {
@@ -873,6 +925,53 @@ internal sealed class MainForm : Form
             BeginInvoke((Action)UpdateDetail);
     }
 
+    private bool ApplyViewerTelemetry(JsonElement root)
+    {
+        if (Volatile.Read(ref _adaptiveFpsEnabled) != 1)
+            return false;
+
+        var now = Stopwatch.GetTimestamp();
+        var last = Interlocked.Read(ref _adaptiveFpsLastAdjust);
+        if (last != 0 && now - last < Stopwatch.Frequency * 2)
+            return false;
+
+        var dropped = root.TryGetProperty("dropped", out var droppedElement) &&
+                      droppedElement.TryGetInt32(out var droppedValue)
+            ? Math.Max(0, droppedValue)
+            : 0;
+        var renderedFps = root.TryGetProperty("rendered_fps", out var renderedElement) &&
+                          renderedElement.TryGetDouble(out var renderedValue)
+            ? Math.Max(0, renderedValue)
+            : 0;
+        var averageDecodeMs = root.TryGetProperty("average_decode_ms", out var decodeElement) &&
+                              decodeElement.TryGetDouble(out var decodeValue)
+            ? Math.Max(0, decodeValue)
+            : 0;
+
+        var current = Math.Clamp(Volatile.Read(ref _fps), 2, 12);
+        var next = current;
+        var budgetMs = 1000.0 / current;
+
+        if (dropped >= 2 || averageDecodeMs > budgetMs * 0.80)
+        {
+            next = Math.Max(2, current - 2);
+        }
+        else if (dropped == 0 &&
+                 renderedFps >= current * 0.80 &&
+                 averageDecodeMs > 0 &&
+                 averageDecodeMs < budgetMs * 0.45)
+        {
+            next = Math.Min(12, current + 1);
+        }
+
+        if (next == current)
+            return false;
+
+        Volatile.Write(ref _fps, next);
+        Interlocked.Exchange(ref _adaptiveFpsLastAdjust, now);
+        return true;
+    }
+
     private async Task SendCaptureSettingsAckAsync(CancellationToken ct)
     {
         var message = JsonSerializer.Serialize(new
@@ -880,7 +979,9 @@ internal sealed class MainForm : Form
             type = "capture_settings",
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
+            scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
+            adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode)
         });
         await SendTextAsync(message, ct);
@@ -1055,6 +1156,9 @@ internal sealed class MainForm : Form
         _liveExpiresAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
+        Volatile.Write(ref _scalePercent, 100);
+        Volatile.Write(ref _adaptiveFpsEnabled, 0);
+        Interlocked.Exchange(ref _adaptiveFpsLastAdjust, 0);
         Volatile.Write(ref _captureMode, "auto");
         Volatile.Write(ref _captureBackend, "initializing");
         Interlocked.Exchange(ref _captureTelemetryStamp, 0);
@@ -1064,6 +1168,7 @@ internal sealed class MainForm : Form
         Interlocked.Exchange(ref _captureWindowElapsedTicks, 0);
         Interlocked.Exchange(ref _captureWindowSamples, 0);
         Volatile.Write(ref _viewerConnected, 0);
+        Volatile.Write(ref _viewerH264Supported, 0);
         Interlocked.Exchange(ref _reconnectGate, 0);
 
         if (updateUi && !IsDisposed && IsHandleCreated)
@@ -1111,7 +1216,7 @@ internal sealed class MainForm : Form
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         var backend = Volatile.Read(ref _captureBackend);
         _detail.Text =
-            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)

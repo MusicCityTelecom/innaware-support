@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Vortice.Direct3D;
@@ -177,9 +178,9 @@ internal sealed class DxgiScreenCapture : IDisposable
         throw new InvalidOperationException($"DXGI output {wantedName} was not found.");
     }
 
-    public DxgiCaptureStatus TryCaptureJpeg(int timeoutMs, long quality, out byte[]? jpeg)
+    public DxgiCaptureStatus TryCaptureBitmap(int timeoutMs, out Bitmap? bitmap)
     {
-        jpeg = null;
+        bitmap = null;
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var result = _duplication.AcquireNextFrame(
@@ -213,19 +214,15 @@ internal sealed class DxgiScreenCapture : IDisposable
             var mapped = _context.Map(_staging, 0, MapMode.Read);
             try
             {
-                using var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+                bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
                 CopyMappedFrame(bitmap, mapped.DataPointer, (int)mapped.RowPitch);
                 DrawCursor(bitmap);
-
-                using var stream = new MemoryStream();
-                var encoder = ImageCodecInfo.GetImageEncoders()
-                    .First(x => x.FormatID == ImageFormat.Jpeg.Guid);
-                using var parameters = new EncoderParameters(1);
-                parameters.Param[0] = new EncoderParameter(
-                    System.Drawing.Imaging.Encoder.Quality,
-                    Math.Clamp(quality, 20L, 90L));
-                bitmap.Save(stream, encoder, parameters);
-                jpeg = stream.ToArray();
+            }
+            catch
+            {
+                bitmap?.Dispose();
+                bitmap = null;
+                throw;
             }
             finally
             {
@@ -238,6 +235,61 @@ internal sealed class DxgiScreenCapture : IDisposable
         {
             resource?.Dispose();
             _duplication.ReleaseFrame();
+        }
+    }
+
+    public DxgiCaptureStatus TryCaptureJpeg(
+        int timeoutMs,
+        long quality,
+        int scalePercent,
+        out byte[]? jpeg)
+    {
+        jpeg = null;
+        var status = TryCaptureBitmap(timeoutMs, out var bitmap);
+        if (status != DxgiCaptureStatus.Frame || bitmap is null)
+            return status;
+
+        using (bitmap)
+        {
+            jpeg = EncodeJpeg(bitmap, quality, scalePercent);
+        }
+        return DxgiCaptureStatus.Frame;
+    }
+
+    private static byte[] EncodeJpeg(Bitmap source, long quality, int scalePercent)
+    {
+        scalePercent = Math.Clamp(scalePercent, 50, 100);
+        Bitmap? scaled = null;
+        var output = source;
+
+        if (scalePercent != 100)
+        {
+            var width = Math.Max(1, source.Width * scalePercent / 100);
+            var height = Math.Max(1, source.Height * scalePercent / 100);
+            scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using var graphics = Graphics.FromImage(scaled);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.DrawImage(source, new Rectangle(0, 0, width, height));
+            output = scaled;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream();
+            var encoder = ImageCodecInfo.GetImageEncoders()
+                .First(x => x.FormatID == ImageFormat.Jpeg.Guid);
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(
+                System.Drawing.Imaging.Encoder.Quality,
+                Math.Clamp(quality, 20L, 90L));
+            output.Save(stream, encoder, parameters);
+            return stream.ToArray();
+        }
+        finally
+        {
+            scaled?.Dispose();
         }
     }
 
