@@ -1092,8 +1092,13 @@ internal sealed class MainForm : Form
     private void ApplyViewerStatus(bool connected)
     {
         Volatile.Write(ref _viewerConnected, connected ? 1 : 0);
-        if (connected)
-            _lastSentFrame = null;
+        _lastSentFrame = null;
+
+        if (!connected)
+        {
+            Volatile.Write(ref _viewerH264Supported, 0);
+            SetVideoTransport("jpeg");
+        }
 
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke((Action)(() =>
