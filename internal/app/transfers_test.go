@@ -112,3 +112,63 @@ func TestTransferStoreListSessionFiltersAndOrders(t *testing.T) {
 		t.Fatalf("expected all 3 session-a transfers, got %d", len(all))
 	}
 }
+
+func TestTransferStoreChatImageMetadataAndPurposeFilter(t *testing.T) {
+	store := NewTransferStore()
+	store.dir = t.TempDir()
+
+	image, err := store.PutWithMetadata(
+		"session-a",
+		"to_tech",
+		"chat_image",
+		"image/png",
+		"screen.png",
+		bytes.NewBufferString("png-bytes"),
+		maxChatImageBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image.Purpose != "chat_image" || image.MimeType != "image/png" {
+		t.Fatalf("chat image metadata was lost: %+v", image)
+	}
+
+	if _, err := store.Put(
+		"session-a",
+		"to_tech",
+		"normal.txt",
+		bytes.NewBufferString("text"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	images := store.ListSessionPurpose("session-a", "to_tech", "chat_image")
+	if len(images) != 1 || images[0].ID != image.ID {
+		t.Fatalf("unexpected chat image filter result: %+v", images)
+	}
+
+	files := store.ListSessionPurpose("session-a", "to_tech", "file")
+	if len(files) != 1 || files[0].Purpose != "file" {
+		t.Fatalf("normal file filter included wrong transfers: %+v", files)
+	}
+}
+
+func TestChatImageHelpers(t *testing.T) {
+	if normalizeTransferPurpose(" CHAT_IMAGE ") != "chat_image" {
+		t.Fatal("chat image purpose was not normalized")
+	}
+	if normalizeTransferPurpose("anything-else") != "file" {
+		t.Fatal("unknown transfer purpose was not reduced to file")
+	}
+
+	for _, value := range []string{"image/jpeg", "image/png", "image/gif"} {
+		if !allowedChatImageMime(value) {
+			t.Fatalf("expected image MIME to be allowed: %s", value)
+		}
+	}
+	for _, value := range []string{"image/svg+xml", "text/html", "application/octet-stream"} {
+		if allowedChatImageMime(value) {
+			t.Fatalf("unexpected image MIME allowed: %s", value)
+		}
+	}
+}
