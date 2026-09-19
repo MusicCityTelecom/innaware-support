@@ -38,6 +38,8 @@ internal sealed class MainForm : Form
     private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private H264CapabilityInfo? _h264Capability;
+    private NetworkSnapshot? _networkSnapshot;
+    private DateTime _networkSnapshotAtUtc;
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
     private long _captureWindowSent;
@@ -344,6 +346,7 @@ internal sealed class MainForm : Form
             .ToArray();
 
         _h264Capability ??= H264Capability.Probe();
+        var network = await GetNetworkSnapshotAsync(ct);
 
         var hello = JsonSerializer.Serialize(new
         {
@@ -363,10 +366,24 @@ internal sealed class MainForm : Form
             h264_hardware_available = _h264Capability.HardwareAvailable,
             h264_hardware_encoders = _h264Capability.HardwareEncoders,
             h264_probe_error = _h264Capability.Error,
+            network,
             live_expires_at = _liveExpiresAtUtc
         });
 
         await SendTextAsync(hello, ct);
+    }
+
+    private async Task<NetworkSnapshot> GetNetworkSnapshotAsync(
+        CancellationToken ct)
+    {
+        if (_networkSnapshot is not null &&
+            DateTime.UtcNow - _networkSnapshotAtUtc < TimeSpan.FromMinutes(1))
+            return _networkSnapshot;
+
+        var snapshot = await NetworkDiagnostics.CaptureAsync(_http, ct);
+        _networkSnapshot = snapshot;
+        _networkSnapshotAtUtc = DateTime.UtcNow;
+        return snapshot;
     }
 
     private async Task CaptureLoopAsync(CancellationToken ct)
@@ -1187,6 +1204,8 @@ internal sealed class MainForm : Form
         _agentToken = null;
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
+        _networkSnapshot = null;
+        _networkSnapshotAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
         Volatile.Write(ref _scalePercent, 100);
