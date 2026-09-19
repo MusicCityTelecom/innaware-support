@@ -63,7 +63,23 @@ func OpenStore(dsn string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := s.recoverSessionStates(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return s, nil
+}
+
+func (s *Store) recoverSessionStates(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE support_sessions
+		SET status='expired', ended_at=COALESCE(ended_at, UTC_TIMESTAMP(6)), agent_token_hash=NULL
+		WHERE status IN ('waiting','approved','connected') AND expires_at <= UTC_TIMESTAMP(6)`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE support_sessions
+		SET status='approved'
+		WHERE status='connected' AND agent_token_hash IS NOT NULL AND expires_at > UTC_TIMESTAMP(6)`)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
