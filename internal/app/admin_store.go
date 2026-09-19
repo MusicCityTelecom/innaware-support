@@ -120,6 +120,10 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, ddl string) err
 		"support_sessions.technician_id": true,
 		"support_sessions.requested_clipboard": true,
 		"support_sessions.requested_file_transfer": true,
+		"support_chat_messages.attachment_transfer_id": true,
+		"support_chat_messages.attachment_name": true,
+		"support_chat_messages.attachment_mime": true,
+		"support_chat_messages.attachment_size": true,
 	}
 	if !allowed[table+"."+column] {
 		return fmt.Errorf("migration attempted unexpected column %s.%s", table, column)
