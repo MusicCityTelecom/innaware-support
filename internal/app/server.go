@@ -74,6 +74,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
 	s.mux.HandleFunc("POST /api/sessions/{id}/files", s.requireTech(s.handleTechFileUpload))
+	s.mux.HandleFunc("GET /api/sessions/{id}/files", s.requireTech(s.handleTechFileList))
 	s.mux.HandleFunc("GET /api/sessions/{id}/files/{transfer}", s.requireTech(s.handleTechFileDownload))
 	s.mux.HandleFunc("GET /api/admins", s.requireAdminRole(s.handleListAdmins))
 	s.mux.HandleFunc("POST /api/admins", s.requireAdminRole(s.handleCreateAdmin))
@@ -695,6 +696,12 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward clipboard session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "file_status" && session.RequestedFileTransfer && len(data) <= 16*1024 {
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward file status session=%s: %v", id, err)
 			}
 		}
 	}
