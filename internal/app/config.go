@@ -19,6 +19,7 @@ type Config struct {
 	CookieSecret      []byte
 	CodeSecret        []byte
 	SessionTTL        time.Duration
+	LiveSessionTTL    time.Duration
 	AgentDownloadPath string
 	TrustProxy        bool
 }
@@ -56,6 +57,12 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("SESSION_TTL_MINUTES must be an integer from 5 to 120")
 	}
 	cfg.SessionTTL = time.Duration(ttlMinutes) * time.Minute
+
+	liveTTLMinutes, err := strconv.Atoi(getenv("LIVE_SESSION_TTL_MINUTES", "480"))
+	if err != nil || liveTTLMinutes < 30 || liveTTLMinutes > 1440 {
+		return Config{}, fmt.Errorf("LIVE_SESSION_TTL_MINUTES must be an integer from 30 to 1440")
+	}
+	cfg.LiveSessionTTL = time.Duration(liveTTLMinutes) * time.Minute
 	return cfg, nil
 }
 

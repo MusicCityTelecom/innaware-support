@@ -65,7 +65,7 @@ func (h *Hub) setTech(id string, p *wsPeer) (old *wsPeer) {
 	return old
 }
 
-func (h *Hub) unsetAgent(id string, p *wsPeer) {
+func (h *Hub) unsetAgent(id string, p *wsPeer) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if r := h.rooms[id]; r != nil && r.agent == p {
@@ -73,10 +73,12 @@ func (h *Hub) unsetAgent(id string, p *wsPeer) {
 		if r.tech == nil {
 			delete(h.rooms, id)
 		}
+		return true
 	}
+	return false
 }
 
-func (h *Hub) unsetTech(id string, p *wsPeer) {
+func (h *Hub) unsetTech(id string, p *wsPeer) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if r := h.rooms[id]; r != nil && r.tech == p {
@@ -84,7 +86,16 @@ func (h *Hub) unsetTech(id string, p *wsPeer) {
 		if r.agent == nil {
 			delete(h.rooms, id)
 		}
+		return true
 	}
+	return false
+}
+
+func (h *Hub) hasTech(id string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	r := h.rooms[id]
+	return r != nil && r.tech != nil
 }
 
 func (h *Hub) sendToTech(id string, messageType int, data []byte) error {

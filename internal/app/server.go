@@ -76,6 +76,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/admin-audit", s.requireAdminRole(s.handleAdminAudit))
 	s.mux.HandleFunc("POST /api/agent/lookup", s.handleAgentLookup)
 	s.mux.HandleFunc("POST /api/agent/redeem", s.handleAgentRedeem)
+	s.mux.HandleFunc("POST /api/agent/end", s.handleAgentEnd)
 	s.mux.HandleFunc("GET /api/download-status", s.handleDownloadStatus)
 	s.mux.HandleFunc("GET /download/windows", s.handleAgentDownload)
 	s.mux.HandleFunc("GET /ws/agent", s.handleAgentWS)
@@ -435,7 +436,7 @@ func (s *Server) handleAgentRedeem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not authorize support"})
 		return
 	}
-	session, err := s.store.RedeemSession(r.Context(), hmacHex(s.cfg.CodeSecret, code), sha256Hex(token), strings.TrimSpace(req.MachineName), true)
+	session, err := s.store.RedeemSession(r.Context(), hmacHex(s.cfg.CodeSecret, code), sha256Hex(token), strings.TrimSpace(req.MachineName), true, s.cfg.LiveSessionTTL)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "support session was already used, expired, or ended"})
 		return
@@ -451,7 +452,42 @@ func (s *Server) handleAgentRedeem(w http.ResponseWriter, r *http.Request) {
 	q := base.Query()
 	q.Set("session", session.ID)
 	base.RawQuery = q.Encode()
-	writeJSON(w, http.StatusOK, map[string]any{"session_id": session.ID, "agent_token": token, "websocket_url": base.String()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": session.ID,
+		"agent_token": token,
+		"websocket_url": base.String(),
+		"live_expires_at": session.ExpiresAt,
+	})
+}
+
+func (s *Server) handleAgentEnd(w http.ResponseWriter, r *http.Request) {
+	token := bearerToken(r)
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "missing session credential"})
+		return
+	}
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id is required"})
+		return
+	}
+	if err := s.store.EndSessionByAgentToken(r.Context(), req.SessionID, sha256Hex(token)); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "support session is already ended, expired, or unavailable"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not end support session"})
+		return
+	}
+	s.store.AddEvent(r.Context(), req.SessionID, "customer", "session_ended", "customer ended support session")
+	s.hub.End(req.SessionID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleDownloadStatus(w http.ResponseWriter, r *http.Request) {
@@ -488,7 +524,10 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session, err := s.store.GetSession(r.Context(), id)
-	if err != nil || session.Status == "ended" || session.Status == "expired" || !secureEqual(session.AgentTokenHash, sha256Hex(token)) {
+	if err != nil || session.Status == "ended" || session.Status == "expired" || !session.ExpiresAt.After(time.Now().UTC()) || !secureEqual(session.AgentTokenHash, sha256Hex(token)) {
+		if err == nil && !session.ExpiresAt.After(time.Now().UTC()) {
+			_ = s.store.ExpireLiveSession(r.Context(), id)
+		}
 		http.Error(w, "invalid session credentials", http.StatusUnauthorized)
 		return
 	}
@@ -497,14 +536,24 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	peer := &wsPeer{conn: conn}
+	expiryTimer := time.AfterFunc(time.Until(session.ExpiresAt), func() {
+		if err := s.store.ExpireLiveSession(context.Background(), id); err == nil {
+			s.store.AddEvent(context.Background(), id, "system", "session_expired", "")
+			s.hub.End(id)
+		}
+	})
+	defer expiryTimer.Stop()
 	if old := s.hub.setAgent(id, peer); old != nil {
 		old.close(websocket.ClosePolicyViolation, "replaced by new customer connection")
 	}
+	viewerConnected := s.hub.hasTech(id)
+	_ = peer.write(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"viewer_status","connected":%t}`, viewerConnected)))
 	defer func() {
-		s.hub.unsetAgent(id, peer)
-		_ = s.store.MarkAgentDisconnected(context.Background(), id)
-		s.store.AddEvent(context.Background(), id, "system", "agent_disconnected", "")
-		_ = s.hub.sendToTech(id, websocket.TextMessage, []byte(`{"type":"agent_status","status":"disconnected"}`))
+		if s.hub.unsetAgent(id, peer) {
+			_ = s.store.MarkAgentDisconnected(context.Background(), id)
+			s.store.AddEvent(context.Background(), id, "system", "agent_disconnected", "")
+			_ = s.hub.sendToTech(id, websocket.TextMessage, []byte(`{"type":"agent_status","status":"disconnected"}`))
+		}
 		_ = conn.Close()
 	}()
 	_ = s.store.MarkAgentConnected(r.Context(), id)
@@ -527,7 +576,10 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("session")
 	session, err := s.store.GetSession(r.Context(), id)
-	if err != nil || session.Status == "ended" || session.Status == "expired" {
+	if err != nil || session.Status == "ended" || session.Status == "expired" || !session.ExpiresAt.After(time.Now().UTC()) {
+		if err == nil && !session.ExpiresAt.After(time.Now().UTC()) {
+			_ = s.store.ExpireLiveSession(r.Context(), id)
+		}
 		http.Error(w, "session unavailable", http.StatusNotFound)
 		return
 	}
@@ -539,8 +591,11 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 	if old := s.hub.setTech(id, peer); old != nil {
 		old.close(websocket.ClosePolicyViolation, "replaced by new technician connection")
 	}
+	_ = s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"viewer_status","connected":true}`))
 	defer func() {
-		s.hub.unsetTech(id, peer)
+		if s.hub.unsetTech(id, peer) {
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"viewer_status","connected":false}`))
+		}
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
@@ -562,6 +617,12 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		if envelope.Type == "input" && session.RequestedControl {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward tech->agent session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "capture_settings" {
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward capture settings session=%s: %v", id, err)
 			}
 		}
 	}

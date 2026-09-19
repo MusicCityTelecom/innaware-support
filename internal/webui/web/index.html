@@ -148,6 +148,35 @@
           </div>
           <button id="endSessionButton" class="danger" type="button">End session</button>
         </div>
+        <div id="viewerControls" class="viewer-controls">
+          <label>Monitor
+            <select id="monitorSelect">
+              <option value="0">Monitor 1</option>
+            </select>
+          </label>
+          <label>Quality
+            <select id="qualitySelect">
+              <option value="35">Low</option>
+              <option value="55" selected>Balanced</option>
+              <option value="70">High</option>
+              <option value="85">Very high</option>
+            </select>
+          </label>
+          <label>Frame rate
+            <select id="fpsSelect">
+              <option value="2">2 FPS</option>
+              <option value="4">4 FPS</option>
+              <option value="6" selected>6 FPS</option>
+              <option value="8">8 FPS</option>
+              <option value="10">10 FPS</option>
+              <option value="12">12 FPS</option>
+            </select>
+          </label>
+          <div class="viewer-telemetry">
+            <strong id="viewerTelemetry">Waiting for frames</strong>
+            <span id="viewerCaptureState">Capture settings pending</span>
+          </div>
+        </div>
         <div class="viewer-grid">
           <div>
             <div class="screen-wrap">
