@@ -680,10 +680,10 @@ internal sealed class MainForm : Form
 
     private Task SetClipboardTextAsync(string text)
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (IsDisposed || !IsHandleCreated)
         {
-            tcs.SetResult();
+            tcs.SetResult(true);
             return tcs.Task;
         }
 
@@ -692,7 +692,7 @@ internal sealed class MainForm : Form
             try
             {
                 Clipboard.SetDataObject(text, true, 5, 100);
-                tcs.SetResult();
+                tcs.SetResult(true);
             }
             catch (Exception ex)
             {
