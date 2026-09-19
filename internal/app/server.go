@@ -71,6 +71,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/export", s.requireTech(s.handleSessionExport))
 	s.mux.HandleFunc("POST /api/sessions", s.requireTech(s.handleCreateSession))
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.requireTech(s.handleGetSession))
+	s.mux.HandleFunc("GET /api/sessions/{id}/chat", s.requireTech(s.handleChatHistory))
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
 	s.mux.HandleFunc("POST /api/sessions/{id}/files", s.requireTech(s.handleTechFileUpload))
@@ -569,6 +570,7 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 	viewerConnected := s.hub.hasTech(id)
 	_ = peer.write(websocket.TextMessage, []byte(fmt.Sprintf(`{"type":"viewer_status","connected":%t}`, viewerConnected)))
+	s.sendChatHistoryToPeer(r.Context(), id, peer)
 	defer func() {
 		if s.hub.unsetAgent(id, peer) {
 			_ = s.store.MarkAgentDisconnected(context.Background(), id)
@@ -613,6 +615,28 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 			if envelope.Type == "clipboard_status" && !session.RequestedClipboard {
 				continue
 			}
+			if envelope.Type == "chat_message" {
+				var payload struct {
+					Body string `json:"body"`
+				}
+				if json.Unmarshal(data, &payload) != nil {
+					continue
+				}
+				message, err := s.createChatMessage(
+					r.Context(),
+					id,
+					"customer",
+					session.MachineName,
+					payload.Body,
+				)
+				if err != nil {
+					continue
+				}
+				normalized := chatMessageEnvelope(message)
+				_ = peer.write(websocket.TextMessage, normalized)
+				_ = s.hub.sendToTech(id, websocket.TextMessage, normalized)
+				continue
+			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
 				log.Printf("forward agent->tech session=%s: %v", id, err)
 			}
@@ -646,6 +670,7 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
+	s.sendChatHistoryToPeer(r.Context(), id, peer)
 	conn.SetReadLimit(1024 * 1024)
 	for {
 		mt, data, err := conn.ReadMessage()
@@ -703,6 +728,40 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward file status session=%s: %v", id, err)
 			}
+			continue
+		}
+		if envelope.Type == "chat_message" {
+			var payload struct {
+				Body string `json:"body"`
+			}
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			admin := currentAdmin(r.Context())
+			message, err := s.createChatMessage(
+				r.Context(),
+				id,
+				"technician",
+				techName(r.Context()),
+				payload.Body,
+			)
+			if err != nil {
+				continue
+			}
+			normalized := chatMessageEnvelope(message)
+			_ = peer.write(websocket.TextMessage, normalized)
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, normalized)
+			s.store.AddAdminAudit(
+				r.Context(),
+				&admin.ID,
+				admin.Username,
+				"chat_message_sent",
+				"session",
+				id,
+				"",
+				s.clientIP(r),
+			)
+			continue
 		}
 	}
 }
