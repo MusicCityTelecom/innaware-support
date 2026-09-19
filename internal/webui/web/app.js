@@ -469,6 +469,7 @@ function applyAgentHello(msg){
   select.value=String(state.activeMonitor);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
   $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
@@ -481,7 +482,8 @@ function applyCaptureSettingsAck(msg){
   }
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
-  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
+  if(msg.capture_mode) $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
+  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
 }
 
 function applyCaptureTelemetry(msg){
@@ -499,8 +501,9 @@ function sendCaptureSettings(){
   const monitor=Number.parseInt($('monitorSelect').value,10);
   const jpeg_quality=Number.parseInt($('qualitySelect').value,10);
   const fps=Number.parseInt($('fpsSelect').value,10);
+  const capture_mode=$('captureModeSelect').value==='gdi'?'gdi':'auto';
   $('viewerCaptureState').textContent='Applying capture settings…';
-  state.ws.send(JSON.stringify({type:'capture_settings',monitor,jpeg_quality,fps}));
+  state.ws.send(JSON.stringify({type:'capture_settings',monitor,jpeg_quality,fps,capture_mode}));
 }
 
 function resetCaptureTelemetry(){
@@ -509,6 +512,7 @@ function resetCaptureTelemetry(){
   $('viewerTelemetry').textContent='Waiting for frames';
   $('viewerCaptureState').textContent='Capture settings pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
+  $('captureModeSelect').value='auto';
   $('qualitySelect').value='55';
   $('fpsSelect').value='6';
 }
@@ -527,6 +531,7 @@ function updateFrameTelemetry(bytes){
 }
 
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
+$('captureModeSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
 
