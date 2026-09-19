@@ -47,9 +47,9 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 
 ## Current limitations
 
-- primary monitor only;
+- selectable single-monitor viewing, but no simultaneous multi-monitor/composite desktop mode yet;
 - JPEG framebuffer stream rather than DXGI/H.264;
-- approximately 5–6 FPS by default;
+- adjustable 1–12 FPS capture (6 FPS default) and adjustable JPEG quality;
 - no file transfer or clipboard sync yet;
 - no secure-desktop/UAC prompt control;
 - no Ctrl+Alt+Del injection;
@@ -159,6 +159,7 @@ Optional:
 LISTEN_ADDR=127.0.0.1:8787
 PUBLIC_BASE_URL=https://remote.innawareucp.com
 SESSION_TTL_MINUTES=15
+LIVE_SESSION_TTL_MINUTES=480
 AGENT_DOWNLOAD_PATH=/opt/innaware-support/downloads/InnAwareSupport.exe
 TRUST_PROXY=true
 ```
@@ -191,7 +192,7 @@ agent/                     Windows WinForms customer agent
 
 ## Security
 
-Remote-control software is security-sensitive. The MVP deliberately keeps the trust model narrow: explicit customer consent, single-use enrollment, random live credentials, no unattended password, HTTPS/WSS, loopback-only application server, and no secure-desktop bypass.
+Remote-control software is security-sensitive. The MVP deliberately keeps the trust model narrow: explicit customer consent, single-use enrollment, random bounded-lifetime live credentials, customer/technician server-side revocation, no unattended password, HTTPS/WSS, loopback-only application server, and no secure-desktop bypass.
 
 Before broad customer deployment, complete code signing, MFA/SSO, finer-grained RBAC, dependency/release signing, independent review, and real-network acceptance testing. See [docs/SECURITY.md](docs/SECURITY.md).
 
