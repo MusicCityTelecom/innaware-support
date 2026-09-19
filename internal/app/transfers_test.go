@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 type zeroReader struct{}
@@ -75,5 +76,39 @@ func TestTransferStoreRejectsDirectionAndOversize(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("oversize transfer left temporary files behind: %d", len(entries))
+	}
+}
+
+func TestTransferStoreListSessionFiltersAndOrders(t *testing.T) {
+	store := NewTransferStore()
+	store.dir = t.TempDir()
+
+	first, err := store.Put("session-a", "to_tech", "first.txt", bytes.NewBufferString("one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	second, err := store.Put("session-a", "to_tech", "second.txt", bytes.NewBufferString("two"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("session-a", "to_agent", "customer.txt", bytes.NewBufferString("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put("session-b", "to_tech", "other.txt", bytes.NewBufferString("y")); err != nil {
+		t.Fatal(err)
+	}
+
+	items := store.ListSession("session-a", "to_tech")
+	if len(items) != 2 {
+		t.Fatalf("expected 2 pending technician files, got %d", len(items))
+	}
+	if items[0].ID != first.ID || items[1].ID != second.ID {
+		t.Fatalf("pending transfer order changed: %+v", items)
+	}
+
+	all := store.ListSession("session-a", "")
+	if len(all) != 3 {
+		t.Fatalf("expected all 3 session-a transfers, got %d", len(all))
 	}
 }
