@@ -121,7 +121,9 @@ func (s *Store) CreateSession(ctx context.Context, session Session, codeHash str
 }
 
 func (s *Store) expireOld(ctx context.Context) {
-	_, _ = s.db.ExecContext(ctx, `UPDATE support_sessions SET status='expired' WHERE status='waiting' AND expires_at <= UTC_TIMESTAMP(6)`)
+	_, _ = s.db.ExecContext(ctx, `UPDATE support_sessions
+		SET status='expired', agent_token_hash=NULL, ended_at=COALESCE(ended_at, UTC_TIMESTAMP(6))
+		WHERE status IN ('waiting','approved') AND expires_at <= UTC_TIMESTAMP(6)`)
 }
 
 func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) {
@@ -180,7 +182,7 @@ func (s *Store) LookupByCodeHash(ctx context.Context, codeHash string) (Session,
 	return x, nil
 }
 
-func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineName string, termsAccepted bool) (Session, error) {
+func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineName string, termsAccepted bool, liveTTL time.Duration) (Session, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return Session{}, err
@@ -197,8 +199,14 @@ func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineN
 	if x.Status != "waiting" || !x.ExpiresAt.After(time.Now().UTC()) {
 		return Session{}, errors.New("session is not available")
 	}
+	if liveTTL <= 0 {
+		return Session{}, errors.New("live session TTL must be positive")
+	}
 	now := time.Now().UTC()
-	_, err = tx.ExecContext(ctx, `UPDATE support_sessions SET status='approved', terms_accepted=?, machine_name=?, agent_token_hash=?, redeemed_at=? WHERE id=? AND status='waiting'`, termsAccepted, machineName, tokenHash, now, x.ID)
+	liveExpires := now.Add(liveTTL)
+	_, err = tx.ExecContext(ctx, `UPDATE support_sessions
+		SET status='approved', terms_accepted=?, machine_name=?, agent_token_hash=?, redeemed_at=?, expires_at=?
+		WHERE id=? AND status='waiting'`, termsAccepted, machineName, tokenHash, now, liveExpires, x.ID)
 	if err != nil {
 		return Session{}, err
 	}
@@ -210,6 +218,7 @@ func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineN
 	x.MachineName = machineName
 	x.AgentTokenHash = tokenHash
 	x.RedeemedAt = &now
+	x.ExpiresAt = liveExpires
 	return x, nil
 }
 
@@ -219,12 +228,40 @@ func (s *Store) MarkAgentConnected(ctx context.Context, id string) error {
 }
 
 func (s *Store) MarkAgentDisconnected(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE support_sessions SET status='approved' WHERE id=? AND status='connected'`, id)
+	_, err := s.db.ExecContext(ctx, `UPDATE support_sessions SET status='approved' WHERE id=? AND status='connected' AND expires_at > UTC_TIMESTAMP(6)`, id)
 	return err
 }
 
 func (s *Store) EndSession(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE support_sessions SET status='ended', ended_at=UTC_TIMESTAMP(6), agent_token_hash=NULL WHERE id=? AND status <> 'ended'`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) EndSessionByAgentToken(ctx context.Context, id, tokenHash string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE support_sessions
+		SET status='ended', ended_at=UTC_TIMESTAMP(6), agent_token_hash=NULL
+		WHERE id=? AND agent_token_hash=? AND status IN ('approved','connected')`, id, tokenHash)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ExpireLiveSession(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE support_sessions
+		SET status='expired', ended_at=COALESCE(ended_at, UTC_TIMESTAMP(6)), agent_token_hash=NULL
+		WHERE id=? AND status IN ('approved','connected') AND expires_at <= UTC_TIMESTAMP(6)`, id)
 	if err != nil {
 		return err
 	}
