@@ -476,9 +476,11 @@ function applyCaptureSettingsAck(msg){
     $('monitorSelect').value=String(msg.active_monitor);
   }
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
-  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  if(msg.adaptive_fps) $('fpsSelect').value='0';
+  else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.capture_mode) $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
-  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
+  const fpsLabel=msg.adaptive_fps?`Adaptive (${Number(msg.fps)||0} FPS now)`:`${$('fpsSelect').value} FPS`;
+  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · JPEG ${$('qualitySelect').value} · ${fpsLabel}`;
 }
 
 function applyCaptureTelemetry(msg){
@@ -498,7 +500,14 @@ function sendCaptureSettings(){
   const fps=Number.parseInt($('fpsSelect').value,10);
   const capture_mode=$('captureModeSelect').value==='gdi'?'gdi':'auto';
   $('viewerCaptureState').textContent='Applying capture settings…';
-  state.ws.send(JSON.stringify({type:'capture_settings',monitor,jpeg_quality,fps,capture_mode}));
+  state.ws.send(JSON.stringify({
+    type:'capture_settings',
+    monitor,
+    jpeg_quality,
+    fps,
+    adaptive_fps:fps===0,
+    capture_mode
+  }));
 }
 
 function resetCaptureTelemetry(){
@@ -586,6 +595,17 @@ function updateViewerFrameTelemetry(){
 
   $('viewerTelemetry').textContent=
     `${renderedFps.toFixed(1)} rendered · ${receivedFps.toFixed(1)} received · ${mbps.toFixed(2)} Mb/s · ${dropped} dropped · ${avgDecode.toFixed(1)} ms decode`;
+
+  if(state.ws&&state.ws.readyState===WebSocket.OPEN){
+    state.ws.send(JSON.stringify({
+      type:'viewer_telemetry',
+      received_fps:Number(receivedFps.toFixed(2)),
+      rendered_fps:Number(renderedFps.toFixed(2)),
+      dropped,
+      average_decode_ms:Number(avgDecode.toFixed(2)),
+      window_ms:Number((elapsed*1000).toFixed(0))
+    }));
+  }
 
   state.frameWindowStart=now;
   state.renderWindowStart=now;
