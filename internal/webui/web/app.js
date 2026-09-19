@@ -5,6 +5,7 @@ const state = {
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
   monitors: [], activeMonitor: 0,
   frameWindowStart: 0, frameCount: 0, frameBytes: 0,
+  viewMode: 'fit', remoteClipboard: '',
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -252,6 +253,8 @@ $('sessionForm').addEventListener('submit', async event => {
       body:{
         customer_label:$('customerLabel').value,
         requested_control:$('requestControl').checked,
+        requested_clipboard:$('requestClipboard').checked,
+        requested_file_transfer:false,
         requested_elevation:$('requestElevation').checked
       }
     });
@@ -261,6 +264,7 @@ $('sessionForm').addEventListener('submit', async event => {
     $('codeDialog').showModal();
     $('customerLabel').value='';
     $('requestControl').checked=true;
+    $('requestClipboard').checked=true;
     $('requestElevation').checked=false;
     await Promise.all([loadMetrics(), loadSessions()]);
   } catch (e) { $('sessionError').textContent=e.message; }
@@ -292,7 +296,13 @@ async function openViewer(id) {
     const active = ['waiting','approved','connected'].includes(state.session.status);
     $('endSessionButton').classList.toggle('hidden', !active);
     $('viewerControls').classList.toggle('hidden', !active);
+    show('clipboardCard', active && !!state.session.requested_clipboard);
+    $('remoteClipboardText').value='';
+    $('clipboardStatus').textContent='Clipboard idle.';
+    $('copyRemoteClipboardButton').disabled=true;
+    state.remoteClipboard='';
     resetCaptureTelemetry();
+    setViewMode('fit');
     if (active) connectViewerWS(id);
     else {
       $('screenPlaceholder').querySelector('strong').textContent = 'Session complete';
@@ -312,7 +322,9 @@ function resetViewerCanvas() {
 }
 function closeViewer(){
   if(state.ws){state.ws.close();state.ws=null;}
+  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   state.session=null;
+  state.remoteClipboard='';
   show('viewerView',false);
   show('consoleView',true);
   show('publicView',true);
@@ -343,6 +355,7 @@ function renderSessionDetail() {
     ['Expires', escapeHTML(formatDate(s.expires_at))],
     ['Duration', escapeHTML(duration)],
     ['Control', s.requested_control ? 'Requested' : 'View only'],
+    ['Clipboard', s.requested_clipboard ? 'Enabled' : 'No'],
     ['Elevation', s.requested_elevation ? 'May be needed' : 'No']
   ].map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   renderNotes();
@@ -354,7 +367,7 @@ function renderNotes() {
 }
 function renderTimeline() {
   const events = state.session?.events || [];
-  $('sessionTimeline').innerHTML = events.length ? events.map(e => `<div class="timeline-item"><div class="timeline-meta"><span>${escapeHTML(formatDate(e.created_at))}</span><span>${escapeHTMK(e.actor)}</span></div><strong>${escapeHTML(prettyEvent(e.event))}</strong>${e.details ? `<span>${escapeHTML(e.details)}</span>` : ''}</div>`).join('') : '<div class="muted small">No timeline events recorded.</div>';
+  $('sessionTimeline').innerHTML = events.length ? events.map(e => `<div class="timeline-item"><div class="timeline-meta"><span>${escapeHTML(formatDate(e.created_at))}</span><span>${escapeHTML(e.actor)}</span></div><strong>${escapeHTML(prettyEvent(e.event))}</strong>${e.details ? `<span>${escapeHTML(e.details)}</span>` : ''}</div>`).join('') : '<div class="muted small">No timeline events recorded.</div>';
 }
 $('noteForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -394,6 +407,18 @@ function connectViewerWS(id){
           applyAgentHello(msg);
         }
         if(msg.type==='capture_settings') applyCaptureSettingsAck(msg);
+        if(msg.type==='clipboard_data'){
+          const text=typeof msg.text==='string'?msg.text:'';
+          state.remoteClipboard=text;
+          $('remoteClipboardText').value=text;
+          $('copyRemoteClipboardButton').disabled=false;
+          $('clipboardStatus').textContent=`Received ${text.length.toLocaleString()} characters from remote clipboard.`;
+        }
+        if(msg.type==='clipboard_status'){
+          $('clipboardStatus').textContent=msg.ok===false
+            ? 'Remote clipboard operation failed.'
+            : `Remote clipboard updated (${Number(msg.length)||0} characters).`;
+        }
       }catch{}
       return;
     }
@@ -431,7 +456,7 @@ function applyAgentHello(msg){
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
-  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}`;
+  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}`;
 }
 
 function applyCaptureSettingsAck(msg){
@@ -479,6 +504,65 @@ function updateFrameTelemetry(bytes){
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
+
+function setViewMode(mode){
+  state.viewMode=mode==='actual'?'actual':'fit';
+  const wrap=$('screenWrap');
+  wrap.classList.toggle('fit-mode',state.viewMode==='fit');
+  wrap.classList.toggle('actual-mode',state.viewMode==='actual');
+  $('fitViewButton').disabled=state.viewMode==='fit';
+  $('actualViewButton').disabled=state.viewMode==='actual';
+}
+
+$('fitViewButton').addEventListener('click',()=>setViewMode('fit'));
+$('actualViewButton').addEventListener('click',()=>setViewMode('actual'));
+$('fullscreenButton').addEventListener('click',async()=>{
+  try{
+    if(document.fullscreenElement) await document.exitFullscreen();
+    else await $('screenWrap').requestFullscreen();
+  }catch(e){alert('Fullscreen could not be opened: '+e.message);}
+});
+document.addEventListener('fullscreenchange',()=>{
+  $('fullscreenButton').textContent=document.fullscreenElement?'Exit fullscreen':'Fullscreen';
+});
+
+function sendViewerMessage(message){
+  if(!state.ws||state.ws.readyState!==WebSocket.OPEN)throw new Error('Remote session is not connected.');
+  state.ws.send(JSON.stringify(message));
+}
+
+$('sendClipboardButton').addEventListener('click',async()=>{
+  if(!state.session?.requested_clipboard)return;
+  try{
+    if(!navigator.clipboard?.readText)throw new Error('Browser clipboard read is unavailable.');
+    const text=await navigator.clipboard.readText();
+    if(text.length>262144)throw new Error('Clipboard text exceeds the 256 KB session limit.');
+    sendViewerMessage({type:'clipboard_set',text});
+    $('clipboardStatus').textContent=`Sending ${text.length.toLocaleString()} characters to remote clipboard…`;
+  }catch(e){
+    $('clipboardStatus').textContent='Could not read local clipboard: '+e.message;
+  }
+});
+
+$('getClipboardButton').addEventListener('click',()=>{
+  if(!state.session?.requested_clipboard)return;
+  try{
+    sendViewerMessage({type:'clipboard_get'});
+    $('clipboardStatus').textContent='Requesting remote clipboard…';
+  }catch(e){
+    $('clipboardStatus').textContent=e.message;
+  }
+});
+
+$('copyRemoteClipboardButton').addEventListener('click',async()=>{
+  try{
+    if(!navigator.clipboard?.writeText)throw new Error('Browser clipboard write is unavailable.');
+    await navigator.clipboard.writeText(state.remoteClipboard||'');
+    $('clipboardStatus').textContent=`Copied ${(state.remoteClipboard||'').length.toLocaleString()} remote characters to local clipboard.`;
+  }catch(e){
+    $('clipboardStatus').textContent='Could not write local clipboard: '+e.message;
+  }
+});
 
 function sendInput(input){
   if(!state.ws||state.ws.readyState!==WebSocket.OPEN||!state.session?.requested_control)return;
