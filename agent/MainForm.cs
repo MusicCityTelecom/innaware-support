@@ -678,13 +678,16 @@ internal sealed class MainForm : Form
             ? elapsedTicks * 1000.0 / Stopwatch.Frequency / samples
             : 0.0;
 
+        var transport = Volatile.Read(ref _videoTransport);
         var message = JsonSerializer.Serialize(new
         {
             type = "capture_telemetry",
             backend = Volatile.Read(ref _captureBackend),
+            transport,
             frames_sent = sent,
             frames_skipped = skipped,
-            jpeg_bytes = bytes,
+            encoded_bytes = bytes,
+            jpeg_bytes = transport == "jpeg" ? bytes : 0,
             average_capture_ms = Math.Round(avgMs, 2)
         });
 
