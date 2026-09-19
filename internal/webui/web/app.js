@@ -550,9 +550,10 @@ $('sendClipboardButton').addEventListener('click',async()=>{
   try{
     if(!navigator.clipboard?.readText)throw new Error('Browser clipboard read is unavailable.');
     const text=await navigator.clipboard.readText();
-    if(text.length>262144)throw new Error('Clipboard text exceeds the 256 KB session limit.');
+    const bytes=new TextEncoder().encode(text).byteLength;
+    if(bytes>262144)throw new Error('Clipboard text exceeds the 256 KiB session limit.');
     sendViewerMessage({type:'clipboard_set',text});
-    $('clipboardStatus').textContent=`Sending ${text.length.toLocaleString()} characters to remote clipboard…`;
+    $('clipboardStatus').textContent=`Sending ${text.length.toLocaleString()} characters (${formatBytes(bytes)}) to remote clipboard…`;
   }catch(e){
     $('clipboardStatus').textContent='Could not read local clipboard: '+e.message;
   }
