@@ -413,6 +413,7 @@ function connectViewerWS(id){
           applyAgentHello(msg);
         }
         if(msg.type==='capture_settings') applyCaptureSettingsAck(msg);
+        if(msg.type==='capture_telemetry') applyCaptureTelemetry(msg);
         if(msg.type==='clipboard_data'){
           const text=typeof msg.text==='string'?msg.text:'';
           state.remoteClipboard=text;
@@ -481,6 +482,16 @@ function applyCaptureSettingsAck(msg){
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
   $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
+}
+
+function applyCaptureTelemetry(msg){
+  const backend=String(msg.backend||'capture');
+  const sent=Number(msg.frames_sent)||0;
+  const skipped=Number(msg.frames_skipped)||0;
+  const avg=Number(msg.average_capture_ms)||0;
+  const bytes=Number(msg.jpeg_bytes)||0;
+  const payload=bytes>0?` · ${formatBytes(bytes)}/s encoded`:'';
+  $('viewerCaptureState').textContent=`${backend} · sent ${sent}/s · skipped ${skipped}/s · ${avg.toFixed(1)} ms avg${payload}`;
 }
 
 function sendCaptureSettings(){
