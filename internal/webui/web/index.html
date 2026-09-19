@@ -201,6 +201,14 @@
               <h3>Session details</h3>
               <dl id="sessionFacts" class="facts"></dl>
             </div>
+            <div id="fileTransferCard" class="sidebar-card hidden">
+              <h3>File transfer</h3>
+              <p class="small muted">Files are temporary, maximum 25 MB each, and expire from the relay after 30 minutes.</p>
+              <input id="sendFileInput" type="file">
+              <button id="sendFileButton" class="primary file-send-button" type="button">Send file to customer</button>
+              <span id="fileTransferStatus" class="small muted">No active transfer.</span>
+              <div id="incomingFiles" class="incoming-files"></div>
+            </div>
             <div id="clipboardCard" class="sidebar-card hidden">
               <h3>Clipboard text</h3>
               <p class="small muted">Text only, maximum 256 KB. Clipboard access occurs only when you use these controls.</p>
@@ -238,6 +246,7 @@
       <label>Customer / property label<input id="customerLabel" maxlength="160" placeholder="Example: Fairfield Inn front desk"></label>
       <label class="check"><input id="requestControl" type="checkbox" checked><span><strong>Keyboard and mouse control</strong><small>Customer will be told that control is requested.</small></span></label>
       <label class="check"><input id="requestClipboard" type="checkbox" checked><span><strong>Clipboard text sync</strong><small>Allows explicit send/get of text clipboard content during the approved session.</small></span></label>
+      <label class="check"><input id="requestFileTransfer" type="checkbox" checked><span><strong>File transfer</strong><small>Allows explicit file send/receive up to 25 MB during the approved session.</small></span></label>
       <label class="check"><input id="requestElevation" type="checkbox"><span><strong>Administrator elevation may be needed</strong><small>The customer must approve the Windows UAC prompt themselves.</small></span></label>
       <button class="primary" type="submit">Create session</button>
       <p id="sessionError" class="error"></p>
