@@ -17,11 +17,14 @@ internal sealed class MainForm : Form
     private readonly Button _elevate = new();
     private readonly Button _disconnect = new();
     private readonly Button _sendFile = new();
+    private readonly Button _chat = new();
     private readonly Label _status = new();
     private readonly Label _detail = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
+    private readonly List<SupportChatMessage> _chatMessages = new();
 
     private ClientWebSocket? _ws;
+    private ChatForm? _chatForm;
     private CancellationTokenSource? _sessionCts;
     private bool _requestedControl;
     private bool _requestedClipboard;
@@ -51,6 +54,8 @@ internal sealed class MainForm : Form
     private int _viewerConnected;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
+    private bool _restartingForElevation;
+    private int _unreadChat;
     private bool _closing;
 
     public MainForm(StartupOptions options)
@@ -58,14 +63,19 @@ internal sealed class MainForm : Form
         _options = options;
         Text = "InnAware Remote Support";
         Width = 560;
-        Height = 450;
-        MinimumSize = new Size(520, 420);
+        Height = 520;
+        MinimumSize = new Size(520, 490);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(246, 248, 252);
         Font = new Font("Segoe UI", 10F);
         BuildUi();
         _code.Text = NormalizeCode(options.Code ?? "");
         FormClosing += OnFormClosing;
+        Shown += async (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(_options.ResumeFile))
+                await ResumeElevatedSessionAsync(_options.ResumeFile);
+        };
     }
 
     private void BuildUi()
@@ -146,17 +156,26 @@ internal sealed class MainForm : Form
         _sendFile.Visible = false;
         _sendFile.Click += async (_, _) => await SendFileToTechnicianAsync();
 
-        _status.SetBounds(36, 361, 455, 22);
+        _chat.SetBounds(36, 355, 455, 42);
+        _chat.Text = "Chat with Technician";
+        _chat.BackColor = Color.FromArgb(234, 240, 247);
+        _chat.ForeColor = Color.FromArgb(20, 49, 82);
+        _chat.FlatStyle = FlatStyle.Flat;
+        _chat.FlatAppearance.BorderSize = 0;
+        _chat.Visible = false;
+        _chat.Click += (_, _) => ShowChatWindow();
+
+        _status.SetBounds(36, 410, 455, 22);
         _status.Text = "Not connected";
         _status.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
         _status.ForeColor = Color.FromArgb(100, 114, 130);
 
-        _detail.SetBounds(36, 385, 455, 42);
+        _detail.SetBounds(36, 434, 455, 44);
         _detail.Text = $"Server: {_options.Server}";
         _detail.ForeColor = Color.FromArgb(120, 132, 145);
         _detail.Font = new Font("Segoe UI", 8F);
 
-        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _sendFile, _status, _detail]);
+        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _sendFile, _chat, _status, _detail]);
     }
 
     private static void StylePrimary(Button b)
@@ -200,6 +219,7 @@ internal sealed class MainForm : Form
                 requestedAccess.Add("read and set text in your Windows clipboard");
             if (lookup.RequestedFileTransfer)
                 requestedAccess.Add("send and receive files you explicitly approve (up to 25 MB each)");
+            requestedAccess.Add("share basic network diagnostics (adapter, LAN IP, gateway, DNS, and public IP)");
             var permissions = string.Join(", ", requestedAccess);
             var elevation = lookup.RequestedElevation
                 ? "\n\nThe technician indicated that Administrator access may be needed. Windows will still require you to approve any UAC elevation prompt locally."
@@ -297,6 +317,7 @@ internal sealed class MainForm : Form
         {
             _disconnect.Visible = true;
             _sendFile.Visible = _requestedFileTransfer;
+            _chat.Visible = true;
             _disconnect.SetBounds(36, 302, _requestedFileTransfer ? 220 : 455, 45);
             _connect.Visible = false;
             _elevate.Visible = false;
