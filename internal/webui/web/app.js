@@ -481,39 +481,75 @@ function applyAgentHello(msg){
   void updateVideoCodecCapability(msg);
 }
 
-async function updateVideoCodecCapability(msg){
-  const el=$('viewerCodecCapability');
-  if(!el)return;
+async function probeBrowserH264Support(){
+  if(state.h264BrowserSupported)return true;
+  if(typeof VideoDecoder==='undefined' ||
+     typeof VideoDecoder.isConfigSupported!=='function')
+    return false;
 
-  let browserSupported=false;
-  let browserLabel='browser WebCodecs unavailable';
-
-  if('VideoDecoder' in window && typeof VideoDecoder.isConfigSupported==='function'){
-    try{
-      const monitor=(state.monitors||[])[state.activeMonitor]||{};
-      const width=Math.max(2,Number(monitor.width)||1280);
-      const height=Math.max(2,Number(monitor.height)||720);
-      const support=await VideoDecoder.isConfigSupported({
-        codec:'avc1.42E01F',
-        codedWidth:width,
-        codedHeight:height
-      });
-      browserSupported=!!support.supported;
-      browserLabel=browserSupported?'browser H.264 decode ready':'browser H.264 decode unsupported';
-    }catch(e){
-      browserLabel='browser H.264 probe failed';
-    }
+  try{
+    const monitor=(state.monitors||[])[state.activeMonitor]||{};
+    const scale=Math.max(0.5,Math.min(1,Number($('scaleSelect')?.value||100)/100));
+    const width=Math.max(2,Math.floor((Number(monitor.width)||1280)*scale)&~1);
+    const height=Math.max(2,Math.floor((Number(monitor.height)||720)*scale)&~1);
+    const support=await VideoDecoder.isConfigSupported({
+      codec:'avc1.42E01F',
+      codedWidth:width,
+      codedHeight:height,
+      hardwareAcceleration:'no-preference',
+      optimizeForLatency:true
+    });
+    state.h264BrowserSupported=!!support.supported;
+  }catch{
+    state.h264BrowserSupported=false;
   }
 
+  return state.h264BrowserSupported;
+}
+
+async function sendViewerCapabilities(ws){
+  const h264=await probeBrowserH264Support();
+  if(state.ws===ws&&ws.readyState===WebSocket.OPEN){
+    ws.send(JSON.stringify({
+      type:'viewer_capabilities',
+      h264_webcodecs:h264
+    }));
+  }
+}
+
+async function updateVideoCodecCapability(msg){
+  const el=$('viewerCodecCapability');
+  const browserSupported=await probeBrowserH264Support();
   const encoderNames=Array.isArray(msg.h264_hardware_encoders)
     ? msg.h264_hardware_encoders.filter(Boolean)
     : [];
   const agentReady=!!msg.h264_hardware_available;
+
+  state.h264AgentEligible=agentReady;
+  const eligible=agentReady&&browserSupported;
+
+  const option=$('h264TransportOption');
+  if(option)option.disabled=!eligible;
+
   const agentLabel=agentReady
     ? `Windows H.264 HW: ${encoderNames.join(', ')||'available'}`
     : `Windows H.264 HW unavailable${msg.h264_probe_error?' · '+String(msg.h264_probe_error):''}`;
+  const browserLabel=browserSupported
+    ? 'browser H.264 decode ready'
+    : 'browser H.264 decode unavailable';
 
-  el.textContent=`${agentLabel} · ${browserLabel}${agentReady&&browserSupported?' · H.264 path eligible':''}`;
+  if(el)el.textContent=
+    `${agentLabel} · ${browserLabel}${eligible?' · H.264 path eligible':''}`;
+
+  const requested=msg.video_transport==='h264-annexb'&&eligible
+    ? 'h264-annexb'
+    : 'jpeg';
+  state.videoTransport=requested;
+  $('videoTransportSelect').value=requested;
+
+  if(!eligible){
+    resetH264Decoder();
+  }
 }
 
 function applyCaptureSettingsAck(msg){
