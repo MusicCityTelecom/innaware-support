@@ -474,6 +474,42 @@ function applyAgentHello(msg){
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
   $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
+  void updateVideoCodecCapability(msg);
+}
+
+async function updateVideoCodecCapability(msg){
+  const el=$('viewerCodecCapability');
+  if(!el)return;
+
+  let browserSupported=false;
+  let browserLabel='browser WebCodecs unavailable';
+
+  if('VideoDecoder' in window && typeof VideoDecoder.isConfigSupported==='function'){
+    try{
+      const monitor=(state.monitors||[])[state.activeMonitor]||{};
+      const width=Math.max(2,Number(monitor.width)||1280);
+      const height=Math.max(2,Number(monitor.height)||720);
+      const support=await VideoDecoder.isConfigSupported({
+        codec:'avc1.42E01F',
+        codedWidth:width,
+        codedHeight:height
+      });
+      browserSupported=!!support.supported;
+      browserLabel=browserSupported?'browser H.264 decode ready':'browser H.264 decode unsupported';
+    }catch(e){
+      browserLabel='browser H.264 probe failed';
+    }
+  }
+
+  const encoderNames=Array.isArray(msg.h264_hardware_encoders)
+    ? msg.h264_hardware_encoders.filter(Boolean)
+    : [];
+  const agentReady=!!msg.h264_hardware_available;
+  const agentLabel=agentReady
+    ? `Windows H.264 HW: ${encoderNames.join(', ')||'available'}`
+    : `Windows H.264 HW unavailable${msg.h264_probe_error?' · '+String(msg.h264_probe_error):''}`;
+
+  el.textContent=`${agentLabel} · ${browserLabel}${agentReady&&browserSupported?' · H.264 path eligible':''}`;
 }
 
 function applyCaptureSettingsAck(msg){
@@ -527,6 +563,7 @@ function resetCaptureTelemetry(){
   state.frameDecodeBusy=false;state.pendingFrame=null;
   $('viewerTelemetry').textContent='Waiting for frames';
   $('viewerCaptureState').textContent='Capture settings pending';
+  if($('viewerCodecCapability')) $('viewerCodecCapability').textContent='Video codec probe pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
   $('captureModeSelect').value='auto';
   $('scaleSelect').value='100';
