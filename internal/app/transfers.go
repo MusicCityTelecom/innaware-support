@@ -45,8 +45,6 @@ func (s *TransferStore) Put(sessionID, direction, name string, src io.Reader) (F
 		return FileTransfer{}, err
 	}
 
-	s.cleanupLocked(time.Now().UTC())
-
 	id, err := randomToken(18)
 	if err != nil {
 		return FileTransfer{}, err
