@@ -14,8 +14,7 @@ internal static class H264CapabilityProbe
     {
         try
         {
-            MediaFactory.MFStartup(false).CheckError();
-            try
+            MediaFoundationRuntime.EnsureStarted();
             {
                 var output = new RegisterTypeInfo
                 {
@@ -50,10 +49,6 @@ internal static class H264CapabilityProbe
                     output);
 
                 return new H264Capability(fallback.Any(), false);
-            }
-            finally
-            {
-                MediaFactory.MFShutdown();
             }
         }
         catch
