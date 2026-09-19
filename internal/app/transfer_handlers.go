@@ -162,9 +162,11 @@ func (s *Server) handleTechFileDownload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	admin := currentAdmin(r.Context())
-	s.store.AddEvent(r.Context(), id, admin.Username, "file_downloaded_by_technician",
-		fmt.Sprintf("name=%q size=%d", item.Name, item.Size))
+	if item.Purpose != "chat_image" {
+		admin := currentAdmin(r.Context())
+		s.store.AddEvent(r.Context(), id, admin.Username, "file_downloaded_by_technician",
+			fmt.Sprintf("name=%q size=%d", item.Name, item.Size))
+	}
 }
 
 func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
@@ -283,8 +285,10 @@ func (s *Server) handleAgentFileDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.store.AddEvent(r.Context(), session.ID, "customer", "file_downloaded_by_customer",
-		fmt.Sprintf("name=%q size=%d", item.Name, item.Size))
+	if item.Purpose != "chat_image" {
+		s.store.AddEvent(r.Context(), session.ID, "customer", "file_downloaded_by_customer",
+			fmt.Sprintf("name=%q size=%d", item.Name, item.Size))
+	}
 }
 
 func (s *Server) authenticateLiveAgentRequest(r *http.Request) (Session, error) {
