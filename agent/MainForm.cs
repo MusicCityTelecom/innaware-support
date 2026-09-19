@@ -403,8 +403,6 @@ internal sealed class MainForm : Form
                 var elapsedTicks = Stopwatch.GetTimestamp() - started;
 
                 Volatile.Write(ref _captureBackend, backend);
-                Interlocked.Add(ref _captureWindowElapsedTicks, elapsedTicks);
-                Interlocked.Increment(ref _captureWindowSamples);
 
                 if (!hasFrame || frame is null)
                 {
@@ -414,6 +412,9 @@ internal sealed class MainForm : Form
                         await Task.Delay(Math.Min(500, framePeriodMs), ct);
                     continue;
                 }
+
+                Interlocked.Add(ref _captureWindowElapsedTicks, elapsedTicks);
+                Interlocked.Increment(ref _captureWindowSamples);
 
                 var previousFrame = _lastSentFrame;
                 if (previousFrame is not null && previousFrame.AsSpan().SequenceEqual(frame))
@@ -540,7 +541,13 @@ internal sealed class MainForm : Form
                          root.TryGetProperty("connected", out var connectedElement) &&
                          (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
                 {
-                    ApplyViewerStatus(connectedElement.GetBoolean());
+                    var connected = connectedElement.GetBoolean();
+                    ApplyViewerStatus(connected);
+                    if (connected)
+                    {
+                        await SendHelloAsync(ct);
+                        await SendCaptureSettingsAckAsync(ct);
+                    }
                 }
                 else if (type == "viewer_telemetry")
                 {
