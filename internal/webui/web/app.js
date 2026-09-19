@@ -3,6 +3,8 @@ const $ = (id) => document.getElementById(id);
 const state = {
   me: null, sessions: [], history: [], admins: [], audit: [],
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
+  monitors: [], activeMonitor: 0,
+  frameWindowStart: 0, frameCount: 0, frameBytes: 0,
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -289,6 +291,8 @@ async function openViewer(id) {
     renderSessionDetail();
     const active = ['waiting','approved','connected'].includes(state.session.status);
     $('endSessionButton').classList.toggle('hidden', !active);
+    $('viewerControls').classList.toggle('hidden', !active);
+    resetCaptureTelemetry();
     if (active) connectViewerWS(id);
     else {
       $('screenPlaceholder').querySelector('strong').textContent = 'Session complete';
@@ -336,6 +340,7 @@ function renderSessionDetail() {
     ['Created', escapeHTML(formatDate(s.created_at))],
     ['Connected', escapeHTML(formatDate(s.connected_at))],
     ['Ended', escapeHTML(formatDate(s.ended_at))],
+    ['Expires', escapeHTML(formatDate(s.expires_at))],
     ['Duration', escapeHTML(duration)],
     ['Control', s.requested_control ? 'Requested' : 'View only'],
     ['Elevation', s.requested_elevation ? 'May be needed' : 'No']
@@ -370,7 +375,10 @@ function connectViewerWS(id){
   const ws=new WebSocket(`${proto}://${location.host}/ws/tech?session=${encodeURIComponent(id)}`);
   ws.binaryType='arraybuffer';
   state.ws=ws;
-  ws.onopen=()=>setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
+  ws.onopen=()=>{
+    setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
+    $('viewerCaptureState').textContent='Waiting for customer capture settings';
+  };
   ws.onclose=()=>{if(state.ws===ws)setViewerStatus('disconnected');};
   ws.onerror=()=>setViewerStatus('connection error');
   ws.onmessage=async(event)=>{
@@ -381,18 +389,96 @@ function connectViewerWS(id){
           setViewerStatus(msg.status);
           if(msg.status==='connected') $('screenPlaceholder').querySelector('strong').textContent='Customer connected';
         }
-        if(msg.type==='hello') $('viewerMachine').textContent=msg.machine_name||state.session.machine_name||'Customer connected';
+        if(msg.type==='hello'){
+          $('viewerMachine').textContent=msg.machine_name||state.session.machine_name||'Customer connected';
+          applyAgentHello(msg);
+        }
+        if(msg.type==='capture_settings') applyCaptureSettingsAck(msg);
       }catch{}
       return;
     }
+    const bytes=event.data.byteLength||0;
     const blob=new Blob([event.data],{type:'image/jpeg'});
     const bmp=await createImageBitmap(blob);
     const canvas=$('remoteCanvas');
     canvas.width=bmp.width;canvas.height=bmp.height;
     canvas.getContext('2d').drawImage(bmp,0,0);bmp.close();
     canvas.style.display='block';$('screenPlaceholder').style.display='none';setViewerStatus('connected');
+    updateFrameTelemetry(bytes);
   };
 }
+
+function applyAgentHello(msg){
+  state.monitors=Array.isArray(msg.monitors)?msg.monitors:[];
+  const select=$('monitorSelect');
+  select.textContent='';
+  if(!state.monitors.length){
+    const option=document.createElement('option');
+    option.value='0';option.textContent='Monitor 1';
+    select.appendChild(option);
+  }else{
+    for(const m of state.monitors){
+      const option=document.createElement('option');
+      option.value=String(m.index);
+      const size=(m.width&&m.height)?` · ${m.width}×${m.height}`:'';
+      option.textContent=`Monitor ${Number(m.index)+1}${m.primary?' (Primary)':''}${size}`;
+      select.appendChild(option);
+    }
+  }
+  state.activeMonitor=Number.isInteger(msg.active_monitor)?msg.active_monitor:0;
+  select.value=String(state.activeMonitor);
+  if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
+  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
+  renderSessionDetail();
+  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}`;
+}
+
+function applyCaptureSettingsAck(msg){
+  if(Number.isInteger(msg.active_monitor)){
+    state.activeMonitor=msg.active_monitor;
+    $('monitorSelect').value=String(msg.active_monitor);
+  }
+  if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
+  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
+}
+
+function sendCaptureSettings(){
+  if(!state.ws||state.ws.readyState!==WebSocket.OPEN)return;
+  const monitor=Number.parseInt($('monitorSelect').value,10);
+  const jpeg_quality=Number.parseInt($('qualitySelect').value,10);
+  const fps=Number.parseInt($('fpsSelect').value,10);
+  $('viewerCaptureState').textContent='Applying capture settings…';
+  state.ws.send(JSON.stringify({type:'capture_settings',monitor,jpeg_quality,fps}));
+}
+
+function resetCaptureTelemetry(){
+  state.monitors=[];state.activeMonitor=0;
+  state.frameWindowStart=performance.now();state.frameCount=0;state.frameBytes=0;
+  $('viewerTelemetry').textContent='Waiting for frames';
+  $('viewerCaptureState').textContent='Capture settings pending';
+  $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
+  $('qualitySelect').value='55';
+  $('fpsSelect').value='6';
+}
+
+function updateFrameTelemetry(bytes){
+  const now=performance.now();
+  if(!state.frameWindowStart)state.frameWindowStart=now;
+  state.frameCount+=1;
+  state.frameBytes+=bytes;
+  const elapsed=(now-state.frameWindowStart)/1000;
+  if(elapsed<1)return;
+  const fps=state.frameCount/elapsed;
+  const mbps=(state.frameBytes*8/1000000)/elapsed;
+  $('viewerTelemetry').textContent=`${fps.toFixed(1)} FPS · ${mbps.toFixed(2)} Mb/s`;
+  state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
+}
+
+$('monitorSelect').addEventListener('change',sendCaptureSettings);
+$('qualitySelect').addEventListener('change',sendCaptureSettings);
+$('fpsSelect').addEventListener('change',sendCaptureSettings);
 
 function sendInput(input){
   if(!state.ws||state.ws.readyState!==WebSocket.OPEN||!state.session?.requested_control)return;
@@ -405,7 +491,7 @@ canvas.addEventListener('mousedown',(e)=>{canvas.focus();const p=point(e);sendIn
 canvas.addEventListener('mouseup',(e)=>{const p=point(e);sendInput({kind:'mouse_button',button:e.button,down:false,...p});e.preventDefault();});
 canvas.addEventListener('contextmenu',(e)=>e.preventDefault());
 canvas.addEventListener('wheel',(e)=>{sendInput({kind:'mouse_wheel',delta:Math.sign(e.deltaY)*-120});e.preventDefault();},{passive:false});
-canvas.addEventListener('keydown',(e)=>{if(['F5','F11','F12'].includes(e.key))return;sendInput({kind:'key',code:e.code,down:true});e.preventDefault();});
+canvas.addEventListener('keydown',(e)=>{sendInput({kind:'key',code:e.code,down:true});e.preventDefault();});
 canvas.addEventListener('keyup',(e)=>{sendInput({kind:'key',code:e.code,down:false});e.preventDefault();});
 
 $('addAdminButton').addEventListener('click', () => openAdminDialog());
