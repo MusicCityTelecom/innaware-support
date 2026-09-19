@@ -23,8 +23,6 @@ func TestIntegrationRemoteLifecycleMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-
 	ctx := context.Background()
 	id, err := newUUID()
 	if err != nil {
@@ -48,9 +46,10 @@ func TestIntegrationRemoteLifecycleMySQL(t *testing.T) {
 	if err := store.CreateSession(ctx, session, codeHash); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
+	defer func() {
 		_, _ = store.db.ExecContext(context.Background(), "DELETE FROM support_sessions WHERE id=?", id)
-	})
+		_ = store.Close()
+	}()
 
 	liveTTL := 90 * time.Minute
 	redeemed, err := store.RedeemSession(ctx, codeHash, tokenHash, "PHASE2-PC", true, liveTTL)
