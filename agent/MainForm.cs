@@ -444,7 +444,7 @@ internal sealed class MainForm : Form
                          root.TryGetProperty("text", out var clipboardTextElement))
                 {
                     var text = clipboardTextElement.GetString() ?? "";
-                    if (text.Length <= 262144)
+                    if (Encoding.UTF8.GetByteCount(text) <= 262144)
                     {
                         await SetClipboardTextAsync(text);
                         await SendTextAsync(JsonSerializer.Serialize(new
@@ -458,8 +458,7 @@ internal sealed class MainForm : Form
                 }
                 else if (type == "clipboard_get" && _requestedClipboard)
                 {
-                    var text = await GetClipboardTextAsync();
-                    if (text.Length > 262144) text = text[..262144];
+                    var text = ClampUtf8Text(await GetClipboardTextAsync(), 262144);
                     await SendTextAsync(JsonSerializer.Serialize(new
                     {
                         type = "clipboard_data",
@@ -479,6 +478,28 @@ internal sealed class MainForm : Form
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
+    }
+
+    private static string ClampUtf8Text(string text, int maxBytes)
+    {
+        if (Encoding.UTF8.GetByteCount(text) <= maxBytes) return text;
+
+        var low = 0;
+        var high = text.Length;
+        while (low < high)
+        {
+            var mid = low + (high - low + 1) / 2;
+            if (Encoding.UTF8.GetByteCount(text.AsSpan(0, mid)) <= maxBytes)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+
+        if (low > 0 && low < text.Length &&
+            char.IsHighSurrogate(text[low - 1]) && char.IsLowSurrogate(text[low]))
+            low--;
+
+        return text[..low];
     }
 
     private async Task SendFileToTechnicianAsync()
