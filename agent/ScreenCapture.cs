@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
@@ -58,6 +59,7 @@ internal static class ScreenCapture
         int screenIndex,
         long quality,
         int timeoutMs,
+        int scalePercent,
         bool forceGdi,
         out byte[]? jpeg,
         out string backend)
@@ -73,7 +75,7 @@ internal static class ScreenCapture
                     EnsureDxgi(screenIndex);
                     if (_dxgi is not null)
                     {
-                        var status = _dxgi.TryCaptureJpeg(timeoutMs, quality, out jpeg);
+                        var status = _dxgi.TryCaptureJpeg(timeoutMs, quality, scalePercent, out jpeg);
                         backend = "DXGI";
 
                         if (status == DxgiCaptureStatus.Frame)
@@ -96,7 +98,7 @@ internal static class ScreenCapture
 
             try
             {
-                jpeg = CaptureJpegGdi(screenIndex, quality);
+                jpeg = CaptureJpegGdi(screenIndex, quality, scalePercent);
                 backend = forceGdi ? "GDI compatibility" : "GDI fallback";
                 return true;
             }
@@ -136,7 +138,7 @@ internal static class ScreenCapture
         _dxgiRetryAfterUtc = DateTime.UtcNow.Add(retryDelay);
     }
 
-    private static byte[] CaptureJpegGdi(int screenIndex, long quality)
+    private static byte[] CaptureJpegGdi(int screenIndex, long quality, int scalePercent)
     {
         var bounds = GetBounds(screenIndex);
         using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);
@@ -146,12 +148,38 @@ internal static class ScreenCapture
             DrawCursor(graphics, bounds);
         }
 
-        using var stream = new MemoryStream();
-        var encoder = ImageCodecInfo.GetImageEncoders().First(x => x.FormatID == ImageFormat.Jpeg.Guid);
-        using var parameters = new EncoderParameters(1);
-        parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, Math.Clamp(quality, 20L, 90L));
-        bitmap.Save(stream, encoder, parameters);
-        return stream.ToArray();
+        scalePercent = Math.Clamp(scalePercent, 50, 100);
+        Bitmap? scaled = null;
+        var output = bitmap;
+
+        if (scalePercent != 100)
+        {
+            var width = Math.Max(1, bitmap.Width * scalePercent / 100);
+            var height = Math.Max(1, bitmap.Height * scalePercent / 100);
+            scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using var graphics = Graphics.FromImage(scaled);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = InterpolationMode.Bilinear;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.DrawImage(bitmap, new Rectangle(0, 0, width, height));
+            output = scaled;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream();
+            var encoder = ImageCodecInfo.GetImageEncoders().First(x => x.FormatID == ImageFormat.Jpeg.Guid);
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(
+                System.Drawing.Imaging.Encoder.Quality,
+                Math.Clamp(quality, 20L, 90L));
+            output.Save(stream, encoder, parameters);
+            return stream.ToArray();
+        }
+        finally
+        {
+            scaled?.Dispose();
+        }
     }
 
     private static void DrawCursor(Graphics graphics, Rectangle bounds)

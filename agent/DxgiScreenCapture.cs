@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Vortice.Direct3D;
@@ -177,7 +178,7 @@ internal sealed class DxgiScreenCapture : IDisposable
         throw new InvalidOperationException($"DXGI output {wantedName} was not found.");
     }
 
-    public DxgiCaptureStatus TryCaptureJpeg(int timeoutMs, long quality, out byte[]? jpeg)
+    public DxgiCaptureStatus TryCaptureJpeg(int timeoutMs, long quality, int scalePercent, out byte[]? jpeg)
     {
         jpeg = null;
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -217,15 +218,7 @@ internal sealed class DxgiScreenCapture : IDisposable
                 CopyMappedFrame(bitmap, mapped.DataPointer, (int)mapped.RowPitch);
                 DrawCursor(bitmap);
 
-                using var stream = new MemoryStream();
-                var encoder = ImageCodecInfo.GetImageEncoders()
-                    .First(x => x.FormatID == ImageFormat.Jpeg.Guid);
-                using var parameters = new EncoderParameters(1);
-                parameters.Param[0] = new EncoderParameter(
-                    System.Drawing.Imaging.Encoder.Quality,
-                    Math.Clamp(quality, 20L, 90L));
-                bitmap.Save(stream, encoder, parameters);
-                jpeg = stream.ToArray();
+                jpeg = EncodeJpeg(bitmap, quality, scalePercent);
             }
             finally
             {
@@ -238,6 +231,43 @@ internal sealed class DxgiScreenCapture : IDisposable
         {
             resource?.Dispose();
             _duplication.ReleaseFrame();
+        }
+    }
+
+    private static byte[] EncodeJpeg(Bitmap source, long quality, int scalePercent)
+    {
+        scalePercent = Math.Clamp(scalePercent, 50, 100);
+        Bitmap? scaled = null;
+        var output = source;
+
+        if (scalePercent != 100)
+        {
+            var width = Math.Max(1, source.Width * scalePercent / 100);
+            var height = Math.Max(1, source.Height * scalePercent / 100);
+            scaled = new Bitmap(width, height, PixelFormat.Format24bppRgb);
+            using var graphics = Graphics.FromImage(scaled);
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.Bilinear;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.DrawImage(source, new Rectangle(0, 0, width, height));
+            output = scaled;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream();
+            var encoder = ImageCodecInfo.GetImageEncoders()
+                .First(x => x.FormatID == ImageFormat.Jpeg.Guid);
+            using var parameters = new EncoderParameters(1);
+            parameters.Param[0] = new EncoderParameter(
+                System.Drawing.Imaging.Encoder.Quality,
+                Math.Clamp(quality, 20L, 90L));
+            output.Save(stream, encoder, parameters);
+            return stream.ToArray();
+        }
+        finally
+        {
+            scaled?.Dispose();
         }
     }
 

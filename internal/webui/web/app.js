@@ -5,6 +5,8 @@ const state = {
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
   monitors: [], activeMonitor: 0,
   frameWindowStart: 0, frameCount: 0, frameBytes: 0,
+  renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
+  frameDecodeBusy: false, pendingFrame: null,
   viewMode: 'fit', remoteClipboard: '',
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
@@ -308,7 +310,10 @@ async function openViewer(id) {
     state.remoteClipboard='';
     resetCaptureTelemetry();
     setViewMode('fit');
-    if (active) connectViewerWS(id);
+    if (active) {
+      connectViewerWS(id);
+      if (state.session.requested_file_transfer) void loadPendingCustomerFiles();
+    }
     else {
       $('screenPlaceholder').querySelector('strong').textContent = 'Session complete';
       $('screenPlaceholder').querySelector('span').textContent = 'Remote control is no longer available. Review the notes and timeline for this support session.';
@@ -397,6 +402,7 @@ function connectViewerWS(id){
   ws.onopen=()=>{
     setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
     $('viewerCaptureState').textContent='Waiting for customer capture settings';
+    if(state.session?.requested_file_transfer) void loadPendingCustomerFiles();
   };
   ws.onclose=()=>{if(state.ws===ws)setViewerStatus('disconnected');};
   ws.onerror=()=>setViewerStatus('connection error');
@@ -437,14 +443,7 @@ function connectViewerWS(id){
       }catch{}
       return;
     }
-    const bytes=event.data.byteLength||0;
-    const blob=new Blob([event.data],{type:'image/jpeg'});
-    const bmp=await createImageBitmap(blob);
-    const canvas=$('remoteCanvas');
-    canvas.width=bmp.width;canvas.height=bmp.height;
-    canvas.getContext('2d').drawImage(bmp,0,0);bmp.close();
-    canvas.style.display='block';$('screenPlaceholder').style.display='none';setViewerStatus('connected');
-    updateFrameTelemetry(bytes);
+    queueRemoteFrame(event.data);
   };
 }
 
@@ -467,8 +466,10 @@ function applyAgentHello(msg){
   }
   state.activeMonitor=Number.isInteger(msg.active_monitor)?msg.active_monitor:0;
   select.value=String(state.activeMonitor);
+  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
-  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  if(msg.adaptive_fps) $('fpsSelect').value='0';
+  else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
@@ -480,10 +481,13 @@ function applyCaptureSettingsAck(msg){
     state.activeMonitor=msg.active_monitor;
     $('monitorSelect').value=String(msg.active_monitor);
   }
+  if(msg.scale_percent) $('scaleSelect').value=String(msg.scale_percent);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
-  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  if(msg.adaptive_fps) $('fpsSelect').value='0';
+  else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.capture_mode) $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
-  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · JPEG ${$('qualitySelect').value} · ${$('fpsSelect').value} FPS`;
+  const fpsLabel=msg.adaptive_fps?`Adaptive (${Number(msg.fps)||0} FPS now)`:`${$('fpsSelect').value} FPS`;
+  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · ${$('scaleSelect').value}% · JPEG ${$('qualitySelect').value} · ${fpsLabel}`;
 }
 
 function applyCaptureTelemetry(msg){
@@ -499,39 +503,132 @@ function applyCaptureTelemetry(msg){
 function sendCaptureSettings(){
   if(!state.ws||state.ws.readyState!==WebSocket.OPEN)return;
   const monitor=Number.parseInt($('monitorSelect').value,10);
+  const scale_percent=Number.parseInt($('scaleSelect').value,10);
   const jpeg_quality=Number.parseInt($('qualitySelect').value,10);
   const fps=Number.parseInt($('fpsSelect').value,10);
   const capture_mode=$('captureModeSelect').value==='gdi'?'gdi':'auto';
   $('viewerCaptureState').textContent='Applying capture settings…';
-  state.ws.send(JSON.stringify({type:'capture_settings',monitor,jpeg_quality,fps,capture_mode}));
+  state.ws.send(JSON.stringify({
+    type:'capture_settings',
+    monitor,
+    scale_percent,
+    jpeg_quality,
+    fps,
+    adaptive_fps:fps===0,
+    capture_mode
+  }));
 }
 
 function resetCaptureTelemetry(){
   state.monitors=[];state.activeMonitor=0;
-  state.frameWindowStart=performance.now();state.frameCount=0;state.frameBytes=0;
+  const now=performance.now();
+  state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
+  state.renderWindowStart=now;state.renderCount=0;state.renderDropped=0;state.renderDecodeMs=0;
+  state.frameDecodeBusy=false;state.pendingFrame=null;
   $('viewerTelemetry').textContent='Waiting for frames';
   $('viewerCaptureState').textContent='Capture settings pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
   $('captureModeSelect').value='auto';
+  $('scaleSelect').value='100';
   $('qualitySelect').value='55';
   $('fpsSelect').value='6';
 }
 
-function updateFrameTelemetry(bytes){
+function queueRemoteFrame(buffer){
+  const bytes=buffer?.byteLength||0;
+  recordReceivedFrame(bytes);
+
+  if(state.frameDecodeBusy){
+    if(state.pendingFrame) state.renderDropped+=1;
+    state.pendingFrame=buffer;
+    return;
+  }
+
+  state.pendingFrame=buffer;
+  void drainRemoteFrames();
+}
+
+async function drainRemoteFrames(){
+  if(state.frameDecodeBusy)return;
+  state.frameDecodeBusy=true;
+
+  try{
+    while(state.pendingFrame){
+      const buffer=state.pendingFrame;
+      state.pendingFrame=null;
+      const started=performance.now();
+
+      try{
+        const blob=new Blob([buffer],{type:'image/jpeg'});
+        const bmp=await createImageBitmap(blob);
+        const canvas=$('remoteCanvas');
+        canvas.width=bmp.width;
+        canvas.height=bmp.height;
+        canvas.getContext('2d').drawImage(bmp,0,0);
+        bmp.close();
+
+        canvas.style.display='block';
+        $('screenPlaceholder').style.display='none';
+        setViewerStatus('connected');
+
+        state.renderCount+=1;
+        state.renderDecodeMs+=performance.now()-started;
+      }catch{
+        state.renderDropped+=1;
+      }
+
+      updateViewerFrameTelemetry();
+    }
+  }finally{
+    state.frameDecodeBusy=false;
+  }
+}
+
+function recordReceivedFrame(bytes){
   const now=performance.now();
   if(!state.frameWindowStart)state.frameWindowStart=now;
   state.frameCount+=1;
   state.frameBytes+=bytes;
+  updateViewerFrameTelemetry();
+}
+
+function updateViewerFrameTelemetry(){
+  const now=performance.now();
   const elapsed=(now-state.frameWindowStart)/1000;
   if(elapsed<1)return;
-  const fps=state.frameCount/elapsed;
+
+  const receivedFps=state.frameCount/elapsed;
+  const renderedFps=state.renderCount/elapsed;
   const mbps=(state.frameBytes*8/1000000)/elapsed;
-  $('viewerTelemetry').textContent=`${fps.toFixed(1)} FPS · ${mbps.toFixed(2)} Mb/s`;
-  state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
+  const avgDecode=state.renderCount>0?state.renderDecodeMs/state.renderCount:0;
+  const dropped=state.renderDropped;
+
+  $('viewerTelemetry').textContent=
+    `${renderedFps.toFixed(1)} rendered · ${receivedFps.toFixed(1)} received · ${mbps.toFixed(2)} Mb/s · ${dropped} dropped · ${avgDecode.toFixed(1)} ms decode`;
+
+  if(state.ws&&state.ws.readyState===WebSocket.OPEN){
+    state.ws.send(JSON.stringify({
+      type:'viewer_telemetry',
+      received_fps:Number(receivedFps.toFixed(2)),
+      rendered_fps:Number(renderedFps.toFixed(2)),
+      dropped,
+      average_decode_ms:Number(avgDecode.toFixed(2)),
+      window_ms:Number((elapsed*1000).toFixed(0))
+    }));
+  }
+
+  state.frameWindowStart=now;
+  state.renderWindowStart=now;
+  state.frameCount=0;
+  state.frameBytes=0;
+  state.renderCount=0;
+  state.renderDropped=0;
+  state.renderDecodeMs=0;
 }
 
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
 $('captureModeSelect').addEventListener('change',sendCaptureSettings);
+$('scaleSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
 
@@ -602,13 +699,38 @@ function formatBytes(value){
   return `${(n/(1024*1024)).toFixed(2)} MB`;
 }
 
-function addIncomingFile(msg){
+async function loadPendingCustomerFiles(){
+  if(!state.session?.requested_file_transfer)return;
+  try{
+    const data=await api(`/api/sessions/${encodeURIComponent(state.session.id)}/files`);
+    for(const item of data.transfers||[]){
+      addIncomingFile({
+        transfer_id:item.id,
+        direction:item.direction,
+        name:item.name,
+        size:item.size,
+        expires_at:item.expires_at
+      },false);
+    }
+    if((data.transfers||[]).length){
+      $('fileTransferStatus').textContent=`${data.transfers.length} customer file${data.transfers.length===1?'':'s'} available.`;
+    }
+  }catch(e){
+    $('fileTransferStatus').textContent='Could not refresh pending customer files: '+e.message;
+  }
+}
+
+function addIncomingFile(msg,ack=true){
   if(!state.session||!state.session.requested_file_transfer)return;
   const transferId=String(msg.transfer_id||'');
   if(!transferId)return;
+  if([...$('incomingFiles').children].some(row=>row.dataset.transferId===transferId)){
+    return;
+  }
   const name=String(msg.name||'support-file.bin');
   const row=document.createElement('div');
   row.className='incoming-file';
+  row.dataset.transferId=transferId;
   const strong=document.createElement('strong');
   strong.textContent=name;
   const meta=document.createElement('span');
@@ -617,9 +739,19 @@ function addIncomingFile(msg){
   link.href=`/api/sessions/${encodeURIComponent(state.session.id)}/files/${encodeURIComponent(transferId)}`;
   link.textContent='Download from customer';
   link.setAttribute('download',name);
+  link.addEventListener('click',()=>{
+    try{
+      sendViewerMessage({type:'file_status',transfer_id:transferId,name,status:'technician_download_started'});
+    }catch{}
+  });
   row.append(strong,meta,link);
   $('incomingFiles').prepend(row);
   $('fileTransferStatus').textContent=`Customer offered ${name}.`;
+  if(ack){
+    try{
+      sendViewerMessage({type:'file_status',transfer_id:transferId,name,status:'available_to_technician'});
+    }catch{}
+  }
 }
 
 $('sendFileButton').addEventListener('click',async()=>{

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,28 @@ func (s *TransferStore) Get(id string) (FileTransfer, bool) {
 	s.cleanupLocked(time.Now().UTC())
 	item, ok := s.items[id]
 	return item, ok
+}
+
+func (s *TransferStore) ListSession(sessionID, direction string) []FileTransfer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupLocked(time.Now().UTC())
+
+	out := make([]FileTransfer, 0)
+	for _, item := range s.items {
+		if item.SessionID != sessionID {
+			continue
+		}
+		if direction != "" && item.Direction != direction {
+			continue
+		}
+		out = append(out, item)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out
 }
 
 func (s *TransferStore) Remove(id string) {
