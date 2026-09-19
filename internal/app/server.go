@@ -575,7 +575,23 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if mt == websocket.BinaryMessage || mt == websocket.TextMessage {
+		if mt == websocket.BinaryMessage {
+			if err := s.hub.sendToTech(id, mt, data); err != nil {
+				log.Printf("forward agent->tech session=%s: %v", id, err)
+			}
+			continue
+		}
+		if mt == websocket.TextMessage {
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(data, &envelope) != nil {
+				continue
+			}
+			if (envelope.Type == "clipboard_data" || envelope.Type == "clipboard_status") &&
+				(!session.RequestedClipboard || len(data) > 300*1024) {
+				continue
+			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
 				log.Printf("forward agent->tech session=%s: %v", id, err)
 			}
@@ -609,7 +625,7 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
-	conn.SetReadLimit(64 * 1024)
+	conn.SetReadLimit(384 * 1024)
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
