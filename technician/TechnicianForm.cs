@@ -187,7 +187,7 @@ internal sealed class TechnicianForm : Form
         combo.Items.AddRange(items);
         if (combo.Items.Count > 0)
             combo.SelectedIndex = 0;
-        combo.SelectionChangeCommitted += async (_, _) =>
+        combo.ComboBox.SelectionChangeCommitted += async (_, _) =>
         {
             if (combo.SelectedItem is string value)
                 await changed(value);
