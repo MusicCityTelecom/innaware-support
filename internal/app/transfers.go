@@ -12,12 +12,15 @@ import (
 )
 
 const maxTransferBytes int64 = 25 * 1024 * 1024
+const maxChatImageBytes int64 = 10 * 1024 * 1024
 const transferTTL = 30 * time.Minute
 
 type FileTransfer struct {
 	ID        string    `json:"id"`
 	SessionID string    `json:"session_id"`
 	Direction string    `json:"direction"`
+	Purpose   string    `json:"purpose"`
+	MimeType  string    `json:"mime_type"`
 	Name      string    `json:"name"`
 	Size      int64     `json:"size"`
 	Path      string    `json:"-"`
@@ -39,8 +42,38 @@ func NewTransferStore() *TransferStore {
 }
 
 func (s *TransferStore) Put(sessionID, direction, name string, src io.Reader) (FileTransfer, error) {
+	return s.PutWithMetadata(
+		sessionID,
+		direction,
+		"file",
+		"application/octet-stream",
+		name,
+		src,
+		maxTransferBytes,
+	)
+}
+
+func (s *TransferStore) PutWithMetadata(
+	sessionID, direction, purpose, mimeType, name string,
+	src io.Reader,
+	maxBytes int64,
+) (FileTransfer, error) {
 	if direction != "to_agent" && direction != "to_tech" {
 		return FileTransfer{}, errors.New("invalid transfer direction")
+	}
+	purpose = strings.TrimSpace(strings.ToLower(purpose))
+	if purpose == "" {
+		purpose = "file"
+	}
+	if purpose != "file" && purpose != "chat_image" {
+		return FileTransfer{}, errors.New("invalid transfer purpose")
+	}
+	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	if maxBytes < 1 || maxBytes > maxTransferBytes {
+		maxBytes = maxTransferBytes
 	}
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return FileTransfer{}, err
@@ -65,7 +98,7 @@ func (s *TransferStore) Put(sessionID, direction, name string, src io.Reader) (F
 		return FileTransfer{}, err
 	}
 
-	n, copyErr := io.Copy(f, io.LimitReader(src, maxTransferBytes+1))
+	n, copyErr := io.Copy(f, io.LimitReader(src, maxBytes+1))
 	closeErr := f.Close()
 	if copyErr != nil {
 		_ = os.Remove(path)
@@ -75,14 +108,15 @@ func (s *TransferStore) Put(sessionID, direction, name string, src io.Reader) (F
 		_ = os.Remove(path)
 		return FileTransfer{}, closeErr
 	}
-	if n > maxTransferBytes {
+	if n > maxBytes {
 		_ = os.Remove(path)
-		return FileTransfer{}, errors.New("file exceeds 25 MB transfer limit")
+		return FileTransfer{}, errors.New("file exceeds transfer size limit")
 	}
 
 	now := time.Now().UTC()
 	item := FileTransfer{
 		ID: id, SessionID: sessionID, Direction: direction,
+		Purpose: purpose, MimeType: mimeType,
 		Name: name, Size: n, Path: path,
 		CreatedAt: now, ExpiresAt: now.Add(transferTTL),
 	}
@@ -103,6 +137,12 @@ func (s *TransferStore) Get(id string) (FileTransfer, bool) {
 }
 
 func (s *TransferStore) ListSession(sessionID, direction string) []FileTransfer {
+	return s.ListSessionPurpose(sessionID, direction, "")
+}
+
+func (s *TransferStore) ListSessionPurpose(
+	sessionID, direction, purpose string,
+) []FileTransfer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cleanupLocked(time.Now().UTC())
@@ -113,6 +153,9 @@ func (s *TransferStore) ListSession(sessionID, direction string) []FileTransfer 
 			continue
 		}
 		if direction != "" && item.Direction != direction {
+			continue
+		}
+		if purpose != "" && item.Purpose != purpose {
 			continue
 		}
 		out = append(out, item)
