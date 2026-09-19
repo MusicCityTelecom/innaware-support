@@ -493,7 +493,7 @@ async function probeBrowserH264Support(){
     const width=Math.max(2,Math.floor((Number(monitor.width)||1280)*scale)&~1);
     const height=Math.max(2,Math.floor((Number(monitor.height)||720)*scale)&~1);
     const support=await VideoDecoder.isConfigSupported({
-      codec:'avc1.42E01F',
+      codec:'avc1.42E028',
       codedWidth:width,
       codedHeight:height,
       hardwareAcceleration:'no-preference',
@@ -712,7 +712,7 @@ async function ensureH264Decoder(){
 
   try{
     decoder.configure({
-      codec:'avc1.42E01F',
+      codec:'avc1.42E028',
       hardwareAcceleration:'no-preference',
       optimizeForLatency:true
     });
