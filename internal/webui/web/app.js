@@ -879,7 +879,7 @@ function startViewerRecording(){
     state.recorderStartedAt=new Date();
     const recorder=new MediaRecorder(stream,mime?{mimeType:mime}:{});
     recorder.ondataavailable=e=>{if(e.data&&e.data.size)state.recorderChunks.push(e.data);};
-    recorder.onstop=()=>finishViewerRecording(recorder.mimeType||'video/webm');
+    recorder.onstop=()=>finishViewerRecording(recorder.mimeType||'video/webm', recorder.stream);
     recorder.start(1000);
     state.recorder=recorder;
     $('recordViewerButton').textContent='Stop recording';
@@ -901,13 +901,12 @@ function stopViewerRecording(download=true){
   try{sendViewerMessage({type:'recording_status',status:'stopped'});}catch{}
 }
 
-function finishViewerRecording(mimeType){
+function finishViewerRecording(mimeType, stream){
   const chunks=state.recorderChunks.splice(0);
   const shouldDownload=state.recorderDownload;
   state.recorderDownload=true;
-  const recorderStream=state.recorder?.stream;
-  if(recorderStream){
-    for(const track of recorderStream.getTracks())track.stop();
+  if(stream){
+    for(const track of stream.getTracks())track.stop();
   }
   if(!chunks.length||!shouldDownload)return;
   const blob=new Blob(chunks,{type:mimeType});
