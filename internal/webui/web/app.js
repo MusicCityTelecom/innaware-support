@@ -5,6 +5,8 @@ const state = {
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
   monitors: [], activeMonitor: 0,
   frameWindowStart: 0, frameCount: 0, frameBytes: 0,
+  renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
+  frameDecodeBusy: false, pendingFrame: null,
   viewMode: 'fit', remoteClipboard: '',
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
@@ -437,14 +439,7 @@ function connectViewerWS(id){
       }catch{}
       return;
     }
-    const bytes=event.data.byteLength||0;
-    const blob=new Blob([event.data],{type:'image/jpeg'});
-    const bmp=await createImageBitmap(blob);
-    const canvas=$('remoteCanvas');
-    canvas.width=bmp.width;canvas.height=bmp.height;
-    canvas.getContext('2d').drawImage(bmp,0,0);bmp.close();
-    canvas.style.display='block';$('screenPlaceholder').style.display='none';setViewerStatus('connected');
-    updateFrameTelemetry(bytes);
+    queueRemoteFrame(event.data);
   };
 }
 
@@ -508,7 +503,10 @@ function sendCaptureSettings(){
 
 function resetCaptureTelemetry(){
   state.monitors=[];state.activeMonitor=0;
-  state.frameWindowStart=performance.now();state.frameCount=0;state.frameBytes=0;
+  const now=performance.now();
+  state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
+  state.renderWindowStart=now;state.renderCount=0;state.renderDropped=0;state.renderDecodeMs=0;
+  state.frameDecodeBusy=false;state.pendingFrame=null;
   $('viewerTelemetry').textContent='Waiting for frames';
   $('viewerCaptureState').textContent='Capture settings pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
@@ -517,17 +515,85 @@ function resetCaptureTelemetry(){
   $('fpsSelect').value='6';
 }
 
-function updateFrameTelemetry(bytes){
+function queueRemoteFrame(buffer){
+  const bytes=buffer?.byteLength||0;
+  recordReceivedFrame(bytes);
+
+  if(state.frameDecodeBusy){
+    if(state.pendingFrame) state.renderDropped+=1;
+    state.pendingFrame=buffer;
+    return;
+  }
+
+  state.pendingFrame=buffer;
+  void drainRemoteFrames();
+}
+
+async function drainRemoteFrames(){
+  if(state.frameDecodeBusy)return;
+  state.frameDecodeBusy=true;
+
+  try{
+    while(state.pendingFrame){
+      const buffer=state.pendingFrame;
+      state.pendingFrame=null;
+      const started=performance.now();
+
+      try{
+        const blob=new Blob([buffer],{type:'image/jpeg'});
+        const bmp=await createImageBitmap(blob);
+        const canvas=$('remoteCanvas');
+        canvas.width=bmp.width;
+        canvas.height=bmp.height;
+        canvas.getContext('2d').drawImage(bmp,0,0);
+        bmp.close();
+
+        canvas.style.display='block';
+        $('screenPlaceholder').style.display='none';
+        setViewerStatus('connected');
+
+        state.renderCount+=1;
+        state.renderDecodeMs+=performance.now()-started;
+      }catch{
+        state.renderDropped+=1;
+      }
+
+      updateViewerFrameTelemetry();
+    }
+  }finally{
+    state.frameDecodeBusy=false;
+  }
+}
+
+function recordReceivedFrame(bytes){
   const now=performance.now();
   if(!state.frameWindowStart)state.frameWindowStart=now;
   state.frameCount+=1;
   state.frameBytes+=bytes;
+  updateViewerFrameTelemetry();
+}
+
+function updateViewerFrameTelemetry(){
+  const now=performance.now();
   const elapsed=(now-state.frameWindowStart)/1000;
   if(elapsed<1)return;
-  const fps=state.frameCount/elapsed;
+
+  const receivedFps=state.frameCount/elapsed;
+  const renderedFps=state.renderCount/elapsed;
   const mbps=(state.frameBytes*8/1000000)/elapsed;
-  $('viewerTelemetry').textContent=`${fps.toFixed(1)} FPS · ${mbps.toFixed(2)} Mb/s`;
-  state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
+  const avgDecode=state.renderCount>0?state.renderDecodeMs/state.renderCount:0;
+  const dropped=state.renderDropped;
+
+  $('viewerTelemetry').textContent=
+    `${renderedFps.toFixed(1)} rendered · ${receivedFps.toFixed(1)} received · ${mbps.toFixed(2)} Mb/s · ${dropped} dropped · ${avgDecode.toFixed(1)} ms decode`;
+
+  state.frameWindowStart=now;
+  state.renderWindowStart=now;
+  state.frameCount=0;
+  state.frameBytes=0;
+  state.renderCount=0;
+  state.renderDropped=0;
+  state.renderDecodeMs=0;
 }
 
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
