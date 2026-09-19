@@ -811,9 +811,26 @@ function renderChatMessages(){
   }
   box.innerHTML=state.chatMessages.map(m=>{
     const sender=String(m.sender_type||'customer');
+    const body=m.body
+      ? `<div class="chat-body">${escapeHTML(m.body)}</div>`
+      : '';
+    let attachment='';
+    if(m.attachment_transfer_id){
+      const id=encodeURIComponent(String(m.attachment_transfer_id));
+      const sessionId=encodeURIComponent(state.session?.id||'');
+      const src=`/api/sessions/${sessionId}/chat/images/${id}`;
+      attachment=`<div class="chat-attachment">
+        <a href="${src}" target="_blank" rel="noopener">
+          <img src="${src}" alt="${escapeHTML(m.attachment_name||'Chat image')}" loading="lazy"
+               onerror="this.closest('.chat-attachment').classList.add('expired');this.style.display='none'">
+        </a>
+        <span>${escapeHTML(m.attachment_name||'Image')} · ${formatBytes(m.attachment_size||0)}</span>
+        <small>Temporary image · expires with transfer storage</small>
+      </div>`;
+    }
     return `<div class="chat-message ${sender==='technician'?'technician':'customer'}">
       <div class="chat-meta"><strong>${escapeHTML(m.sender_name||sender)}</strong><span>${escapeHTML(formatDate(m.created_at))}</span></div>
-      <div class="chat-body">${escapeHTML(m.body||'')}</div>
+      ${body}${attachment}
     </div>`;
   }).join('');
   box.scrollTop=box.scrollHeight;
@@ -834,6 +851,50 @@ $('chatBody').addEventListener('keydown',e=>{
   if(e.key==='Enter'&&!e.shiftKey){
     e.preventDefault();
     $('chatForm').requestSubmit();
+  }
+});
+
+$('chatImageButton').addEventListener('click',()=>{
+  if(!state.session?.requested_file_transfer){
+    $('chatStatus').textContent='File transfer must be approved before sending chat images.';
+    return;
+  }
+  $('chatImageInput').click();
+});
+
+$('chatImageInput').addEventListener('change',async()=>{
+  const file=$('chatImageInput').files?.[0];
+  if(!file||!state.session)return;
+  $('chatImageInput').value='';
+
+  const allowed=['image/jpeg','image/png','image/gif','image/webp'];
+  if(!allowed.includes(file.type)){
+    $('chatStatus').textContent='Chat images must be JPEG, PNG, GIF, or WebP.';
+    return;
+  }
+  if(file.size>5*1024*1024){
+    $('chatStatus').textContent='Chat images are limited to 5 MB.';
+    return;
+  }
+
+  const form=new FormData();
+  form.append('image',file,file.name);
+  $('chatImageButton').disabled=true;
+  $('chatStatus').textContent=`Uploading ${file.name}…`;
+
+  try{
+    const response=await fetch(
+      `/api/sessions/${encodeURIComponent(state.session.id)}/chat/images`,
+      {method:'POST',body:form,credentials:'same-origin'}
+    );
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||`Image upload failed (${response.status})`);
+    if(data.message)addChatMessage(data.message);
+    $('chatStatus').textContent='Image sent.';
+  }catch(e){
+    $('chatStatus').textContent=e.message;
+  }finally{
+    $('chatImageButton').disabled=false;
   }
 });
 
