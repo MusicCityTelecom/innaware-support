@@ -33,6 +33,15 @@ internal sealed class MainForm : Form
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
     private int _fps = 6;
+    private string _captureMode = "auto";
+    private string _captureBackend = "initializing";
+    private byte[]? _lastSentFrame;
+    private long _captureWindowSent;
+    private long _captureWindowSkipped;
+    private long _captureWindowBytes;
+    private long _captureWindowElapsedTicks;
+    private long _captureWindowSamples;
+    private long _captureTelemetryStamp;
     private int _viewerConnected;
     private int _reconnectGate;
     private bool _explicitEndInProgress;
@@ -342,6 +351,7 @@ internal sealed class MainForm : Form
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
             fps = Volatile.Read(ref _fps),
+            capture_mode = Volatile.Read(ref _captureMode),
             live_expires_at = _liveExpiresAtUtc
         });
 
@@ -366,18 +376,97 @@ internal sealed class MainForm : Form
                 var monitorIndex = Volatile.Read(ref _monitorIndex);
                 var quality = Volatile.Read(ref _jpegQuality);
                 var fps = Math.Clamp(Volatile.Read(ref _fps), 1, 12);
+                var framePeriodMs = Math.Max(1, 1000 / fps);
+                var captureMode = Volatile.Read(ref _captureMode);
 
-                var frame = ScreenCapture.CaptureJpeg(monitorIndex, quality);
+                var started = Stopwatch.GetTimestamp();
+                var hasFrame = ScreenCapture.TryCaptureJpeg(
+                    monitorIndex,
+                    quality,
+                    framePeriodMs,
+                    captureMode == "gdi",
+                    out var frame,
+                    out var backend);
+                var elapsedTicks = Stopwatch.GetTimestamp() - started;
+
+                Volatile.Write(ref _captureBackend, backend);
+                Interlocked.Add(ref _captureWindowElapsedTicks, elapsedTicks);
+                Interlocked.Increment(ref _captureWindowSamples);
+
+                if (!hasFrame || frame is null)
+                {
+                    Interlocked.Increment(ref _captureWindowSkipped);
+                    await MaybeSendCaptureTelemetryAsync(ct);
+                    if (backend == "capture unavailable")
+                        await Task.Delay(Math.Min(500, framePeriodMs), ct);
+                    continue;
+                }
+
+                var previousFrame = _lastSentFrame;
+                if (previousFrame is not null && previousFrame.AsSpan().SequenceEqual(frame))
+                {
+                    Interlocked.Increment(ref _captureWindowSkipped);
+                    await MaybeSendCaptureTelemetryAsync(ct);
+                    var duplicateElapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                    var duplicateDelayMs = framePeriodMs - (int)Math.Ceiling(duplicateElapsedMs);
+                    if (duplicateDelayMs > 0)
+                        await Task.Delay(duplicateDelayMs, ct);
+                    continue;
+                }
+
+                _lastSentFrame = frame;
                 await SendBinaryAsync(frame, ct);
-                await Task.Delay(Math.Max(1, 1000 / fps), ct);
+                Interlocked.Increment(ref _captureWindowSent);
+                Interlocked.Add(ref _captureWindowBytes, frame.Length);
+                await MaybeSendCaptureTelemetryAsync(ct);
+
+                var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                var remainingMs = framePeriodMs - (int)Math.Ceiling(elapsedMs);
+                if (remainingMs > 0)
+                    await Task.Delay(remainingMs, ct);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception)
         {
+            ScreenCapture.ResetAcceleratedCapture();
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
                 _ = ScheduleReconnectAsync("Screen stream interrupted.", ct);
         }
+    }
+
+    private async Task MaybeSendCaptureTelemetryAsync(CancellationToken ct)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var previous = Interlocked.Read(ref _captureTelemetryStamp);
+        if (previous != 0 && (now - previous) < Stopwatch.Frequency)
+            return;
+        if (Interlocked.CompareExchange(ref _captureTelemetryStamp, now, previous) != previous)
+            return;
+
+        var sent = Interlocked.Exchange(ref _captureWindowSent, 0);
+        var skipped = Interlocked.Exchange(ref _captureWindowSkipped, 0);
+        var bytes = Interlocked.Exchange(ref _captureWindowBytes, 0);
+        var elapsedTicks = Interlocked.Exchange(ref _captureWindowElapsedTicks, 0);
+        var samples = Interlocked.Exchange(ref _captureWindowSamples, 0);
+        var avgMs = samples > 0
+            ? elapsedTicks * 1000.0 / Stopwatch.Frequency / samples
+            : 0.0;
+
+        var message = JsonSerializer.Serialize(new
+        {
+            type = "capture_telemetry",
+            backend = Volatile.Read(ref _captureBackend),
+            frames_sent = sent,
+            frames_skipped = skipped,
+            jpeg_bytes = bytes,
+            average_capture_ms = Math.Round(avgMs, 2)
+        });
+
+        await SendTextAsync(message, ct);
+
+        if (!IsDisposed && IsHandleCreated)
+            BeginInvoke((Action)UpdateDetail);
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
@@ -727,6 +816,8 @@ internal sealed class MainForm : Form
     private void ApplyViewerStatus(bool connected)
     {
         Volatile.Write(ref _viewerConnected, connected ? 1 : 0);
+        if (connected)
+            _lastSentFrame = null;
 
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke((Action)(() =>
@@ -743,13 +834,40 @@ internal sealed class MainForm : Form
     private void ApplyCaptureSettings(JsonElement root)
     {
         if (root.TryGetProperty("monitor", out var monitorElement) && monitorElement.TryGetInt32(out var monitor))
-            Volatile.Write(ref _monitorIndex, ScreenCapture.NormalizeScreenIndex(monitor));
+        {
+            var normalized = ScreenCapture.NormalizeScreenIndex(monitor);
+            var previous = Volatile.Read(ref _monitorIndex);
+            Volatile.Write(ref _monitorIndex, normalized);
+            if (normalized != previous)
+            {
+                _lastSentFrame = null;
+                ScreenCapture.ResetAcceleratedCapture();
+            }
+        }
 
         if (root.TryGetProperty("jpeg_quality", out var qualityElement) && qualityElement.TryGetInt32(out var quality))
-            Volatile.Write(ref _jpegQuality, Math.Clamp(quality, 25, 85));
+        {
+            var nextQuality = Math.Clamp(quality, 25, 85);
+            if (nextQuality != Volatile.Read(ref _jpegQuality))
+                _lastSentFrame = null;
+            Volatile.Write(ref _jpegQuality, nextQuality);
+        }
 
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
             Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
+
+        if (root.TryGetProperty("capture_mode", out var modeElement))
+        {
+            var nextMode = string.Equals(modeElement.GetString(), "gdi", StringComparison.OrdinalIgnoreCase)
+                ? "gdi"
+                : "auto";
+            if (!string.Equals(nextMode, Volatile.Read(ref _captureMode), StringComparison.Ordinal))
+            {
+                Volatile.Write(ref _captureMode, nextMode);
+                _lastSentFrame = null;
+                ScreenCapture.ResetAcceleratedCapture();
+            }
+        }
 
         if (!IsDisposed && IsHandleCreated)
             BeginInvoke((Action)UpdateDetail);
@@ -762,7 +880,8 @@ internal sealed class MainForm : Form
             type = "capture_settings",
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
-            fps = Volatile.Read(ref _fps)
+            fps = Volatile.Read(ref _fps),
+            capture_mode = Volatile.Read(ref _captureMode)
         });
         await SendTextAsync(message, ct);
     }
@@ -934,6 +1053,16 @@ internal sealed class MainForm : Form
         _agentToken = null;
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
+        _lastSentFrame = null;
+        ScreenCapture.ResetAcceleratedCapture();
+        Volatile.Write(ref _captureMode, "auto");
+        Volatile.Write(ref _captureBackend, "initializing");
+        Interlocked.Exchange(ref _captureTelemetryStamp, 0);
+        Interlocked.Exchange(ref _captureWindowSent, 0);
+        Interlocked.Exchange(ref _captureWindowSkipped, 0);
+        Interlocked.Exchange(ref _captureWindowBytes, 0);
+        Interlocked.Exchange(ref _captureWindowElapsedTicks, 0);
+        Interlocked.Exchange(ref _captureWindowSamples, 0);
         Volatile.Write(ref _viewerConnected, 0);
         Interlocked.Exchange(ref _reconnectGate, 0);
 
@@ -980,8 +1109,9 @@ internal sealed class MainForm : Form
             ? ""
             : $" · Session expires {_liveExpiresAtUtc.ToLocalTime():g}";
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
+        var backend = Volatile.Read(ref _captureBackend);
         _detail.Text =
-            $"Server: {_options.Server} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)

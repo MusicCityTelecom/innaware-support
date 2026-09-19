@@ -7,6 +7,11 @@ internal sealed record MonitorInfo(int Index, string DeviceName, int Width, int 
 
 internal static class ScreenCapture
 {
+    private static readonly object CaptureLock = new();
+    private static DxgiScreenCapture? _dxgi;
+    private static int _dxgiScreenIndex = -1;
+    private static DateTime _dxgiRetryAfterUtc = DateTime.MinValue;
+
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X; public int Y; }
     [StructLayout(LayoutKind.Sequential)] private struct CURSORINFO { public int cbSize; public int flags; public nint hCursor; public POINT ptScreenPos; }
     private const int CURSOR_SHOWING = 0x00000001;
@@ -49,7 +54,89 @@ internal static class ScreenCapture
         return primary >= 0 ? primary : 0;
     }
 
-    public static byte[] CaptureJpeg(int screenIndex, long quality = 55L)
+    public static bool TryCaptureJpeg(
+        int screenIndex,
+        long quality,
+        int timeoutMs,
+        bool forceGdi,
+        out byte[]? jpeg,
+        out string backend)
+    {
+        screenIndex = NormalizeScreenIndex(screenIndex);
+
+        lock (CaptureLock)
+        {
+            if (!forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
+            {
+                try
+                {
+                    EnsureDxgi(screenIndex);
+                    if (_dxgi is not null)
+                    {
+                        var status = _dxgi.TryCaptureJpeg(timeoutMs, quality, out jpeg);
+                        backend = "DXGI";
+
+                        if (status == DxgiCaptureStatus.Frame)
+                            return true;
+
+                        if (status == DxgiCaptureStatus.NoFrame)
+                            return false;
+
+                        ResetDxgi(TimeSpan.FromMilliseconds(250));
+                        jpeg = null;
+                        backend = "DXGI reset";
+                        return false;
+                    }
+                }
+                catch
+                {
+                    ResetDxgi(TimeSpan.FromSeconds(30));
+                }
+            }
+
+            try
+            {
+                jpeg = CaptureJpegGdi(screenIndex, quality);
+                backend = forceGdi ? "GDI compatibility" : "GDI fallback";
+                return true;
+            }
+            catch
+            {
+                jpeg = null;
+                backend = "capture unavailable";
+                return false;
+            }
+        }
+    }
+
+    public static void ResetAcceleratedCapture()
+    {
+        lock (CaptureLock)
+        {
+            ResetDxgi(TimeSpan.Zero);
+        }
+    }
+
+    private static void EnsureDxgi(int screenIndex)
+    {
+        if (_dxgi is not null && _dxgiScreenIndex == screenIndex)
+            return;
+
+        ResetDxgi(TimeSpan.Zero);
+        _dxgi = DxgiScreenCapture.Create(screenIndex);
+        _dxgiScreenIndex = screenIndex;
+        _dxgiRetryAfterUtc = DateTime.MinValue;
+    }
+
+    private static void ResetDxgi(TimeSpan retryDelay)
+    {
+        try { _dxgi?.Dispose(); } catch { }
+        _dxgi = null;
+        _dxgiScreenIndex = -1;
+        _dxgiRetryAfterUtc = DateTime.UtcNow.Add(retryDelay);
+    }
+
+    private static byte[] CaptureJpegGdi(int screenIndex, long quality)
     {
         var bounds = GetBounds(screenIndex);
         using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format24bppRgb);

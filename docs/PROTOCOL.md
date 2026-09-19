@@ -97,6 +97,7 @@ Example hello:
   "active_monitor": 0,
   "jpeg_quality": 55,
   "fps": 6,
+  "capture_mode": "auto",
   "live_expires_at": "2026-09-19T08:00:00Z"
 }
 ```
@@ -108,7 +109,8 @@ Capture-setting acknowledgement:
   "type": "capture_settings",
   "active_monitor": 0,
   "jpeg_quality": 55,
-  "fps": 6
+  "fps": 6,
+  "capture_mode": "auto"
 }
 ```
 
@@ -157,7 +159,8 @@ Capture settings can be changed independently of control permission:
   "type": "capture_settings",
   "monitor": 1,
   "jpeg_quality": 70,
-  "fps": 8
+  "fps": 8,
+  "capture_mode": "auto"
 }
 ```
 
@@ -165,7 +168,8 @@ The Windows agent clamps:
 
 - monitor index to an available display;
 - JPEG quality to 25-85;
-- FPS to 1-12.
+- FPS to 1-12;
+- capture mode to `auto` (DXGI preferred) or `gdi` compatibility mode.
 
 ## Clipboard text
 
@@ -189,7 +193,7 @@ Customer agent -> technician:
 {"type":"clipboard_data","text":"example","length":7}
 ```
 
-The relay forwards clipboard messages only when `requested_clipboard=true`. Clipboard text is capped at 256 KB. The browser UI performs clipboard reads/writes only after a technician presses the corresponding clipboard button.
+The relay forwards clipboard messages only when `requested_clipboard=true`. Clipboard text is capped at 256 KiB. The browser UI performs clipboard reads/writes only after a technician presses the corresponding clipboard button.
 
 ## File transfer
 
@@ -241,15 +245,26 @@ The same live token is reused. Reconnection stops when:
 
 ## Capture implementation
 
-Phase 3 still uses `Graphics.CopyFromScreen` + JPEG for compatibility and simplicity. It now supports:
+Phase 4 separates **desktop capture** from **frame transport**.
 
-- selectable monitors;
-- adjustable JPEG quality;
-- adjustable FPS;
-- capture pause when no viewer is attached;
-- browser-side effective FPS and payload-bandwidth telemetry.
+Capture path:
 
-DXGI Desktop Duplication and hardware video encoding remain the next major performance architecture change.
+- `auto` mode prefers DXGI Desktop Duplication using Direct3D 11;
+- if DXGI initialization or runtime capture fails, the agent falls back to the existing GDI `Graphics.CopyFromScreen` path;
+- after fallback, the agent periodically retries DXGI automatically;
+- `DXGI_ERROR_ACCESS_LOST` resets the duplication object so desktop/UAC/session transitions can recover;
+- technicians can force `gdi` compatibility mode from the viewer without rebuilding the agent;
+- selecting a different monitor recreates accelerated capture for that output.
+
+Idle-frame behavior:
+
+- when DXGI reports no new frame, the agent skips both JPEG encoding and transmission;
+- the GDI fallback suppresses exact duplicate JPEGs before transmission;
+- screen capture still pauses entirely when no technician viewer is attached.
+
+Transport remains JPEG over the existing WebSocket. Browser telemetry reports received FPS/bandwidth, while agent telemetry reports the active backend, frames sent/skipped, encoded bytes, and average capture+JPEG cost.
+
+Hardware H.264/H.265 encoding remains the next major transport/encoding architecture step.
 
 ## Input implementation
 

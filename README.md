@@ -48,8 +48,8 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 ## Current limitations
 
 - selectable single-monitor viewing, but no simultaneous multi-monitor/composite desktop mode yet;
-- JPEG framebuffer stream rather than DXGI/H.264;
-- adjustable 1–12 FPS capture (6 FPS default) and adjustable JPEG quality;
+- DXGI Desktop Duplication is preferred for capture with automatic GDI compatibility fallback, but changed frames are still JPEG rather than H.264/H.265;
+- adjustable 1–12 FPS capture (6 FPS default), adjustable JPEG quality, capture-backend selection, and idle-frame suppression;
 - text clipboard sync is available only when explicitly requested for the session;
 - bidirectional file transfer is explicit, temporary, and limited to 25 MB per file;
 - no secure-desktop/UAC prompt control;
