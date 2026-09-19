@@ -310,7 +310,10 @@ async function openViewer(id) {
     state.remoteClipboard='';
     resetCaptureTelemetry();
     setViewMode('fit');
-    if (active) connectViewerWS(id);
+    if (active) {
+      connectViewerWS(id);
+      if (state.session.requested_file_transfer) void loadPendingCustomerFiles();
+    }
     else {
       $('screenPlaceholder').querySelector('strong').textContent = 'Session complete';
       $('screenPlaceholder').querySelector('span').textContent = 'Remote control is no longer available. Review the notes and timeline for this support session.';
@@ -399,6 +402,7 @@ function connectViewerWS(id){
   ws.onopen=()=>{
     setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
     $('viewerCaptureState').textContent='Waiting for customer capture settings';
+    if(state.session?.requested_file_transfer) void loadPendingCustomerFiles();
   };
   ws.onclose=()=>{if(state.ws===ws)setViewerStatus('disconnected');};
   ws.onerror=()=>setViewerStatus('connection error');
@@ -695,13 +699,38 @@ function formatBytes(value){
   return `${(n/(1024*1024)).toFixed(2)} MB`;
 }
 
-function addIncomingFile(msg){
+async function loadPendingCustomerFiles(){
+  if(!state.session?.requested_file_transfer)return;
+  try{
+    const data=await api(`/api/sessions/${encodeURIComponent(state.session.id)}/files`);
+    for(const item of data.transfers||[]){
+      addIncomingFile({
+        transfer_id:item.id,
+        direction:item.direction,
+        name:item.name,
+        size:item.size,
+        expires_at:item.expires_at
+      },false);
+    }
+    if((data.transfers||[]).length){
+      $('fileTransferStatus').textContent=`${data.transfers.length} customer file${data.transfers.length===1?'':'s'} available.`;
+    }
+  }catch(e){
+    $('fileTransferStatus').textContent='Could not refresh pending customer files: '+e.message;
+  }
+}
+
+function addIncomingFile(msg,ack=true){
   if(!state.session||!state.session.requested_file_transfer)return;
   const transferId=String(msg.transfer_id||'');
   if(!transferId)return;
+  if([...$('incomingFiles').children].some(row=>row.dataset.transferId===transferId)){
+    return;
+  }
   const name=String(msg.name||'support-file.bin');
   const row=document.createElement('div');
   row.className='incoming-file';
+  row.dataset.transferId=transferId;
   const strong=document.createElement('strong');
   strong.textContent=name;
   const meta=document.createElement('span');
@@ -710,9 +739,19 @@ function addIncomingFile(msg){
   link.href=`/api/sessions/${encodeURIComponent(state.session.id)}/files/${encodeURIComponent(transferId)}`;
   link.textContent='Download from customer';
   link.setAttribute('download',name);
+  link.addEventListener('click',()=>{
+    try{
+      sendViewerMessage({type:'file_status',transfer_id:transferId,name,status:'technician_download_started'});
+    }catch{}
+  });
   row.append(strong,meta,link);
   $('incomingFiles').prepend(row);
   $('fileTransferStatus').textContent=`Customer offered ${name}.`;
+  if(ack){
+    try{
+      sendViewerMessage({type:'file_status',transfer_id:transferId,name,status:'available_to_technician'});
+    }catch{}
+  }
 }
 
 $('sendFileButton').addEventListener('click',async()=>{
