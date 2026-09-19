@@ -33,6 +33,7 @@ internal sealed class MainForm : Form
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
     private int _fps = 6;
+    private string _captureMode = "auto";
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
     private long _captureWindowSent;
@@ -350,6 +351,7 @@ internal sealed class MainForm : Form
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
             fps = Volatile.Read(ref _fps),
+            capture_mode = Volatile.Read(ref _captureMode),
             live_expires_at = _liveExpiresAtUtc
         });
 
@@ -375,12 +377,14 @@ internal sealed class MainForm : Form
                 var quality = Volatile.Read(ref _jpegQuality);
                 var fps = Math.Clamp(Volatile.Read(ref _fps), 1, 12);
                 var framePeriodMs = Math.Max(1, 1000 / fps);
+                var captureMode = Volatile.Read(ref _captureMode);
 
                 var started = Stopwatch.GetTimestamp();
                 var hasFrame = ScreenCapture.TryCaptureJpeg(
                     monitorIndex,
                     quality,
                     framePeriodMs,
+                    captureMode == "gdi",
                     out var frame,
                     out var backend);
                 var elapsedTicks = Stopwatch.GetTimestamp() - started;
@@ -852,6 +856,19 @@ internal sealed class MainForm : Form
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
             Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
 
+        if (root.TryGetProperty("capture_mode", out var modeElement))
+        {
+            var nextMode = string.Equals(modeElement.GetString(), "gdi", StringComparison.OrdinalIgnoreCase)
+                ? "gdi"
+                : "auto";
+            if (!string.Equals(nextMode, Volatile.Read(ref _captureMode), StringComparison.Ordinal))
+            {
+                Volatile.Write(ref _captureMode, nextMode);
+                _lastSentFrame = null;
+                ScreenCapture.ResetAcceleratedCapture();
+            }
+        }
+
         if (!IsDisposed && IsHandleCreated)
             BeginInvoke((Action)UpdateDetail);
     }
@@ -863,7 +880,8 @@ internal sealed class MainForm : Form
             type = "capture_settings",
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
-            fps = Volatile.Read(ref _fps)
+            fps = Volatile.Read(ref _fps),
+            capture_mode = Volatile.Read(ref _captureMode)
         });
         await SendTextAsync(message, ct);
     }
@@ -1037,6 +1055,7 @@ internal sealed class MainForm : Form
         _liveExpiresAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
+        Volatile.Write(ref _captureMode, "auto");
         Volatile.Write(ref _captureBackend, "initializing");
         Interlocked.Exchange(ref _captureTelemetryStamp, 0);
         Interlocked.Exchange(ref _captureWindowSent, 0);
