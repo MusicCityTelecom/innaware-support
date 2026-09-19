@@ -34,6 +34,7 @@ internal sealed class MainForm : Form
     private int _jpegQuality = 55;
     private int _fps = 6;
     private string _captureBackend = "initializing";
+    private byte[]? _lastSentFrame;
     private long _captureWindowSent;
     private long _captureWindowSkipped;
     private long _captureWindowBytes;
@@ -395,6 +396,19 @@ internal sealed class MainForm : Form
                     continue;
                 }
 
+                var previousFrame = _lastSentFrame;
+                if (previousFrame is not null && previousFrame.AsSpan().SequenceEqual(frame))
+                {
+                    Interlocked.Increment(ref _captureWindowSkipped);
+                    await MaybeSendCaptureTelemetryAsync(ct);
+                    var duplicateElapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                    var duplicateDelayMs = framePeriodMs - (int)Math.Ceiling(duplicateElapsedMs);
+                    if (duplicateDelayMs > 0)
+                        await Task.Delay(duplicateDelayMs, ct);
+                    continue;
+                }
+
+                _lastSentFrame = frame;
                 await SendBinaryAsync(frame, ct);
                 Interlocked.Increment(ref _captureWindowSent);
                 Interlocked.Add(ref _captureWindowBytes, frame.Length);
@@ -796,6 +810,8 @@ internal sealed class MainForm : Form
     private void ApplyViewerStatus(bool connected)
     {
         Volatile.Write(ref _viewerConnected, connected ? 1 : 0);
+        if (connected)
+            _lastSentFrame = null;
 
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke((Action)(() =>
@@ -817,11 +833,19 @@ internal sealed class MainForm : Form
             var previous = Volatile.Read(ref _monitorIndex);
             Volatile.Write(ref _monitorIndex, normalized);
             if (normalized != previous)
+            {
+                _lastSentFrame = null;
                 ScreenCapture.ResetAcceleratedCapture();
+            }
         }
 
         if (root.TryGetProperty("jpeg_quality", out var qualityElement) && qualityElement.TryGetInt32(out var quality))
-            Volatile.Write(ref _jpegQuality, Math.Clamp(quality, 25, 85));
+        {
+            var nextQuality = Math.Clamp(quality, 25, 85);
+            if (nextQuality != Volatile.Read(ref _jpegQuality))
+                _lastSentFrame = null;
+            Volatile.Write(ref _jpegQuality, nextQuality);
+        }
 
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
             Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
@@ -1009,6 +1033,7 @@ internal sealed class MainForm : Form
         _agentToken = null;
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
+        _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
         Volatile.Write(ref _captureBackend, "initializing");
         Interlocked.Exchange(ref _captureTelemetryStamp, 0);
