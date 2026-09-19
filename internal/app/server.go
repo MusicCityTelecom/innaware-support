@@ -612,6 +612,12 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward tech->agent session=%s: %v", id, err)
 			}
+			continue
+		}
+		if envelope.Type == "capture_settings" {
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward capture settings session=%s: %v", id, err)
+			}
 		}
 	}
 }
