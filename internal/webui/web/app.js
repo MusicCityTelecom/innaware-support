@@ -8,6 +8,7 @@ const state = {
   renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
   frameDecodeBusy: false, pendingFrame: null,
   viewMode: 'fit', remoteClipboard: '',
+  network: null,
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -287,6 +288,7 @@ async function openViewer(id) {
     state.session = data.session;
     state.session.events = data.events || [];
     state.session.notes = data.notes || [];
+    state.network = data.network || null;
     show('consoleView', false);
     show('viewerView', true);
     show('publicView', false);
@@ -296,6 +298,7 @@ async function openViewer(id) {
     setViewerStatus(state.session.status);
     resetViewerCanvas();
     renderSessionDetail();
+    renderNetworkDetails();
     const active = ['waiting','approved','connected'].includes(state.session.status);
     $('endSessionButton').classList.toggle('hidden', !active);
     $('viewerControls').classList.toggle('hidden', !active);
@@ -335,6 +338,7 @@ function closeViewer(){
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   state.session=null;
   state.remoteClipboard='';
+  state.network=null;
   show('viewerView',false);
   show('consoleView',true);
   show('publicView',true);
@@ -372,6 +376,66 @@ function renderSessionDetail() {
   renderNotes();
   renderTimeline();
 }
+function renderNetworkDetails(){
+  const network=state.network;
+  const summary=$('networkSummary');
+  const adaptersBox=$('networkAdapters');
+  const updated=$('networkUpdated');
+  if(!summary||!adaptersBox||!updated)return;
+
+  if(!network){
+    summary.innerHTML='<dt>Public IP</dt><dd>—</dd><dt>Connection</dt><dd>—</dd>';
+    adaptersBox.innerHTML='<div class="muted small">Network details will appear after the customer connects.</div>';
+    updated.textContent='Waiting for diagnostics';
+    return;
+  }
+
+  const adapters=Array.isArray(network.adapters)?network.adapters:[];
+  const methods=[...new Set(adapters.map(a=>String(a.method||'Other')).filter(Boolean))];
+  const connection=methods.length?methods.join(' + '):'Unknown';
+  summary.innerHTML=[
+    ['Public (WAN) IP',escapeHTML(network.public_ip||'Unavailable')],
+    ['Connection',escapeHTML(connection)],
+    ['Adapters',escapeHTML(String(adapters.length))]
+  ].map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
+
+  const stamp=network.captured_at||network.updated_at;
+  updated.textContent=stamp?`Updated ${formatDate(stamp)}`:'Network snapshot';
+
+  if(!adapters.length){
+    adaptersBox.innerHTML='<div class="muted small">No active IPv4 adapters were reported.</div>';
+    return;
+  }
+
+  adaptersBox.innerHTML=adapters.map(adapter=>{
+    const name=escapeHTML(adapter.name||'Adapter');
+    const description=escapeHTML(adapter.description||'');
+    const method=escapeHTML(adapter.method||'Other');
+    const methodClass=String(adapter.method||'').toLowerCase()==='wired'
+      ? 'wired'
+      : String(adapter.method||'').toLowerCase()==='wireless'
+        ? 'wireless'
+        : '';
+    const ipv4=(adapter.ipv4||[]).map(escapeHTML).join(', ')||'—';
+    const masks=(adapter.netmasks||[]).map(escapeHTML).join(', ')||'—';
+    const gateways=(adapter.gateways||[]).map(escapeHTML).join(', ')||'—';
+    const dns=(adapter.dns_servers||[]).map(escapeHTML).join(', ')||'—';
+    return `<div class="network-adapter">
+      <div class="network-adapter-head">
+        <div><strong>${name}</strong>${adapter.default_route?'<span class="network-default">DEFAULT ROUTE</span>':''}</div>
+        <span class="network-method ${methodClass}">${method}</span>
+      </div>
+      ${description?`<div class="network-description">${description}</div>`:''}
+      <div class="network-kv">
+        <span>LAN IPv4</span><span>${ipv4}</span>
+        <span>Netmask</span><span>${masks}</span>
+        <span>Gateway</span><span>${gateways}</span>
+        <span>DNS</span><span>${dns}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 function renderNotes() {
   const notes = state.session?.notes || [];
   $('sessionNotes').innerHTML = notes.length ? notes.map(n => `<div class="note"><div class="note-meta"><strong>${escapeHTML(n.admin_username)}</strong><span>${escapeHTML(formatDate(n.created_at))}</span></div><div>${escapeHTML(n.body).replace(/\n/g,'<br>')}</div></div>`).join('') : '<div class="muted small">No technician notes yet.</div>';
@@ -472,6 +536,10 @@ function applyAgentHello(msg){
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
+  if(msg.network){
+    state.network=msg.network;
+    renderNetworkDetails();
+  }
   renderSessionDetail();
   $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
   void updateVideoCodecCapability(msg);
