@@ -78,6 +78,23 @@ func (s *Server) handleTechFileUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"transfer": item})
 }
 
+func (s *Server) handleTechFileList(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	session, err := s.store.GetSession(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "session not found"})
+		return
+	}
+	if !session.RequestedFileTransfer {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "file transfer was not approved for this session"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"transfers": s.transfers.ListSession(id, "to_tech"),
+	})
+}
+
 func (s *Server) handleTechFileDownload(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.PathValue("id"))
 	transferID := strings.TrimSpace(r.PathValue("transfer"))
@@ -114,11 +131,6 @@ func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": "file transfer was not approved for this session"})
 		return
 	}
-	if !s.hub.hasTech(session.ID) {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "technician viewer is not connected"})
-		return
-	}
-
 	file, name, err := readTransferUpload(w, r)
 	if r.MultipartForm != nil {
 		defer r.MultipartForm.RemoveAll()
@@ -143,15 +155,19 @@ func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
 		"size":        item.Size,
 		"expires_at":  item.ExpiresAt,
 	})
-	if err := s.hub.sendToTech(session.ID, websocket.TextMessage, offer); err != nil {
-		s.transfers.Remove(item.ID)
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "technician viewer disconnected before transfer offer"})
-		return
+	delivered := false
+	if s.hub.hasTech(session.ID) {
+		if err := s.hub.sendToTech(session.ID, websocket.TextMessage, offer); err == nil {
+			delivered = true
+		}
 	}
 
 	s.store.AddEvent(r.Context(), session.ID, "customer", "file_offered_to_technician",
-		fmt.Sprintf("name=%q size=%d", item.Name, item.Size))
-	writeJSON(w, http.StatusCreated, map[string]any{"transfer": item})
+		fmt.Sprintf("name=%q size=%d delivered=%t", item.Name, item.Size, delivered))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"transfer": item,
+		"viewer_notified": delivered,
+	})
 }
 
 func (s *Server) handleAgentFileDownload(w http.ResponseWriter, r *http.Request) {
