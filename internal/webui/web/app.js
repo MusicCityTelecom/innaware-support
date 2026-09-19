@@ -399,6 +399,7 @@ function connectViewerWS(id){
   ws.onopen=()=>{
     setViewerStatus(state.session?.status==='connected'?'connected':'waiting');
     $('viewerCaptureState').textContent='Waiting for customer capture settings';
+    void sendViewerCapabilities(ws);
   };
   ws.onclose=()=>{if(state.ws===ws)setViewerStatus('disconnected');};
   ws.onerror=()=>setViewerStatus('connection error');
@@ -441,6 +442,27 @@ function connectViewerWS(id){
     }
     queueRemoteFrame(event.data);
   };
+}
+
+async function sendViewerCapabilities(ws){
+  let h264=false;
+  try{
+    if(typeof VideoDecoder!=='undefined'&&typeof VideoDecoder.isConfigSupported==='function'){
+      const result=await VideoDecoder.isConfigSupported({
+        codec:'avc1.42E01E',
+        hardwareAcceleration:'no-preference',
+        optimizeForLatency:true
+      });
+      h264=!!result?.supported;
+    }
+  }catch{}
+
+  if(state.ws===ws&&ws.readyState===WebSocket.OPEN){
+    ws.send(JSON.stringify({
+      type:'viewer_capabilities',
+      h264_webcodecs:h264
+    }));
+  }
 }
 
 function applyAgentHello(msg){
