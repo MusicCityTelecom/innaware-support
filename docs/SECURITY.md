@@ -8,6 +8,8 @@ This repository contains remote-support software. Treat code signing, release in
 - Session codes expire and can be redeemed only once.
 - Short codes are HMACed before database storage.
 - Live agent credentials use 256 bits of randomness; only their SHA-256 digests are stored.
+- Redeemed live credentials have a bounded lifetime (8 hours by default), are cleared when either side ends the session, and cannot be reused after revocation/expiry.
+- The customer app makes a bearer-authenticated server-side end request when the customer explicitly ends or closes an active session.
 - Explicit terms/consent is required before code redemption.
 - Technician web authentication uses MySQL-backed accounts, per-user salted PBKDF2-HMAC-SHA256 password hashes, and a Secure/HttpOnly/SameSite=Strict signed cookie.
 - Browser cookies are bound to an account authentication version; password resets, role changes, and account disable/enable operations invalidate older cookies.
@@ -16,6 +18,7 @@ This repository contains remote-support software. Treat code signing, release in
 - Login and code enrollment are rate-limited in process.
 - The Go service listens on loopback by default and is exposed through Apache HTTPS/WSS.
 - The broker does not intentionally persist remote screen frames.
+- Screen capture pauses when no technician viewer is attached, reducing unnecessary relay exposure and bandwidth.
 - The customer executable does not install a permanent remote-access password.
 - The customer can terminate access by closing the app.
 - Administrator elevation invokes normal Windows UAC; it is not bypassed.
