@@ -67,6 +67,19 @@ func TestIntegrationRemoteLifecycleMySQL(t *testing.T) {
 	if err := store.MarkAgentConnected(ctx, id); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.recoverSessionStates(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.GetSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != "approved" || recovered.AgentTokenHash != tokenHash {
+		t.Fatalf("restart recovery did not preserve reconnectable session: %+v", recovered)
+	}
+	if err := store.MarkAgentConnected(ctx, id); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.EndSessionByAgentToken(ctx, id, tokenHash); err != nil {
 		t.Fatal(err)
 	}
