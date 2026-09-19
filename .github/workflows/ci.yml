@@ -70,9 +70,59 @@ jobs:
           name: InnAware-Remote-Support-Windows-x64
           path: dist/InnAware-Remote-Support.exe
 
+  windows-technician:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore technician client
+        run: dotnet restore technician/InnAwareSupport.Technician.csproj
+      - name: Publish technician client
+        run: dotnet publish technician/InnAwareSupport.Technician.csproj -c Release -r win-x64 --self-contained true -o dist/technician
+      - name: Verify technician client
+        shell: pwsh
+        run: |
+          $exe = 'dist/technician/InnAwareSupportTechnician.exe'
+          if (-not (Test-Path $exe)) { throw "Technician executable was not published." }
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
+          Write-Host "ProductName: $($info.ProductName)"
+          Write-Host "FileVersion: $($info.FileVersion)"
+          if ($info.ProductName -ne 'InnAware Support Technician') {
+            throw "Unexpected technician ProductName: $($info.ProductName)"
+          }
+          Get-FileHash $exe -Algorithm SHA256 | Format-List
+      - name: Build portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/technician/* -DestinationPath dist/InnAware-Support-Technician-Portable.zip -Force
+          Get-FileHash dist/InnAware-Support-Technician-Portable.zip -Algorithm SHA256 | Format-List
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found." }
+          New-Item -ItemType Directory -Force -Path dist/installer | Out-Null
+          $publish = (Resolve-Path dist/technician).Path
+          $output = (Resolve-Path dist/installer).Path
+          & $iscc "/DPublishDir=$publish" "/DOutputDir=$output" technician/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit $LASTEXITCODE" }
+          Get-FileHash dist/installer/InnAware-Support-Technician-Setup.exe -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InnAware-Support-Technician-Windows-x64
+          path: |
+            dist/InnAware-Support-Technician-Portable.zip
+            dist/installer/InnAware-Support-Technician-Setup.exe
+
   preview-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [server, windows-agent]
+    needs: [server, windows-agent, windows-technician]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,10 +131,17 @@ jobs:
         with:
           name: InnAware-Remote-Support-Windows-x64
           path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: InnAware-Support-Technician-Windows-x64
+          path: release-tech
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: mvp-latest
           name: InnAware Support MVP (latest main build)
           prerelease: true
           make_latest: false
-          files: release/InnAware-Remote-Support.exe
+          files: |
+            release/InnAware-Remote-Support.exe
+            release-tech/InnAware-Support-Technician-Portable.zip
+            release-tech/InnAware-Support-Technician-Setup.exe
