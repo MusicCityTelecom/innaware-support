@@ -393,6 +393,8 @@ internal sealed class MainForm : Form
                 {
                     Interlocked.Increment(ref _captureWindowSkipped);
                     await MaybeSendCaptureTelemetryAsync(ct);
+                    if (backend == "capture unavailable")
+                        await Task.Delay(Math.Min(500, framePeriodMs), ct);
                     continue;
                 }
 
