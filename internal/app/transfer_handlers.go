@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func (s *Server) handleTechFileUpload(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +60,7 @@ func (s *Server) handleTechFileUpload(w http.ResponseWriter, r *http.Request) {
 		"size":        item.Size,
 		"expires_at":  item.ExpiresAt,
 	})
-	if err := s.hub.sendToAgent(id, 1, offer); err != nil {
+	if err := s.hub.sendToAgent(id, websocket.TextMessage, offer); err != nil {
 		s.transfers.Remove(item.ID)
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "customer support app disconnected before transfer offer"})
 		return
@@ -135,7 +137,7 @@ func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
 		"size":        item.Size,
 		"expires_at":  item.ExpiresAt,
 	})
-	if err := s.hub.sendToTech(session.ID, 1, offer); err != nil {
+	if err := s.hub.sendToTech(session.ID, websocket.TextMessage, offer); err != nil {
 		s.transfers.Remove(item.ID)
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "technician viewer disconnected before transfer offer"})
 		return
