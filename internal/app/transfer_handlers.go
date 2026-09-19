@@ -40,6 +40,9 @@ func (s *Server) handleTechFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	file, name, err := readTransferUpload(w, r)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -117,6 +120,9 @@ func (s *Server) handleAgentFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	file, name, err := readTransferUpload(w, r)
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
@@ -195,7 +201,7 @@ func (s *Server) authenticateLiveAgentRequest(r *http.Request) (Session, error) 
 
 func readTransferUpload(w http.ResponseWriter, r *http.Request) (multipartFile, string, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxTransferBytes+1024*1024)
-	if err := r.ParseMultipartForm(maxTransferBytes + 1024*1024); err != nil {
+	if err := r.ParseMultipartForm(1 * 1024 * 1024); err != nil {
 		return nil, "", errors.New("invalid upload or file exceeds 25 MB limit")
 	}
 
