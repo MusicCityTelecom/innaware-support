@@ -33,6 +33,8 @@ internal sealed class MainForm : Form
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
     private int _fps = 6;
+    private int _adaptiveFpsEnabled;
+    private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
@@ -351,6 +353,7 @@ internal sealed class MainForm : Form
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
             fps = Volatile.Read(ref _fps),
+            adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode),
             live_expires_at = _liveExpiresAtUtc
         });
@@ -528,6 +531,11 @@ internal sealed class MainForm : Form
                          (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
                 {
                     ApplyViewerStatus(connectedElement.GetBoolean());
+                }
+                else if (type == "viewer_telemetry")
+                {
+                    if (ApplyViewerTelemetry(root))
+                        await SendCaptureSettingsAckAsync(ct);
                 }
                 else if (type == "clipboard_set" && _requestedClipboard &&
                          root.TryGetProperty("text", out var clipboardTextElement))
@@ -853,8 +861,24 @@ internal sealed class MainForm : Form
             Volatile.Write(ref _jpegQuality, nextQuality);
         }
 
+        var adaptive = root.TryGetProperty("adaptive_fps", out var adaptiveElement) &&
+                       adaptiveElement.ValueKind == JsonValueKind.True;
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
-            Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
+        {
+            if (adaptive || fps == 0)
+            {
+                Volatile.Write(ref _adaptiveFpsEnabled, 1);
+                var current = Volatile.Read(ref _fps);
+                if (current < 2 || current > 12)
+                    Volatile.Write(ref _fps, 8);
+                Interlocked.Exchange(ref _adaptiveFpsLastAdjust, 0);
+            }
+            else
+            {
+                Volatile.Write(ref _adaptiveFpsEnabled, 0);
+                Volatile.Write(ref _fps, Math.Clamp(fps, 1, 12));
+            }
+        }
 
         if (root.TryGetProperty("capture_mode", out var modeElement))
         {
@@ -873,6 +897,53 @@ internal sealed class MainForm : Form
             BeginInvoke((Action)UpdateDetail);
     }
 
+    private bool ApplyViewerTelemetry(JsonElement root)
+    {
+        if (Volatile.Read(ref _adaptiveFpsEnabled) != 1)
+            return false;
+
+        var now = Stopwatch.GetTimestamp();
+        var last = Interlocked.Read(ref _adaptiveFpsLastAdjust);
+        if (last != 0 && now - last < Stopwatch.Frequency * 2)
+            return false;
+
+        var dropped = root.TryGetProperty("dropped", out var droppedElement) &&
+                      droppedElement.TryGetInt32(out var droppedValue)
+            ? Math.Max(0, droppedValue)
+            : 0;
+        var renderedFps = root.TryGetProperty("rendered_fps", out var renderedElement) &&
+                          renderedElement.TryGetDouble(out var renderedValue)
+            ? Math.Max(0, renderedValue)
+            : 0;
+        var averageDecodeMs = root.TryGetProperty("average_decode_ms", out var decodeElement) &&
+                              decodeElement.TryGetDouble(out var decodeValue)
+            ? Math.Max(0, decodeValue)
+            : 0;
+
+        var current = Math.Clamp(Volatile.Read(ref _fps), 2, 12);
+        var next = current;
+        var budgetMs = 1000.0 / current;
+
+        if (dropped >= 2 || averageDecodeMs > budgetMs * 0.80)
+        {
+            next = Math.Max(2, current - 2);
+        }
+        else if (dropped == 0 &&
+                 renderedFps >= current * 0.80 &&
+                 averageDecodeMs > 0 &&
+                 averageDecodeMs < budgetMs * 0.45)
+        {
+            next = Math.Min(12, current + 1);
+        }
+
+        if (next == current)
+            return false;
+
+        Volatile.Write(ref _fps, next);
+        Interlocked.Exchange(ref _adaptiveFpsLastAdjust, now);
+        return true;
+    }
+
     private async Task SendCaptureSettingsAckAsync(CancellationToken ct)
     {
         var message = JsonSerializer.Serialize(new
@@ -881,6 +952,7 @@ internal sealed class MainForm : Form
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
             fps = Volatile.Read(ref _fps),
+            adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode)
         });
         await SendTextAsync(message, ct);
@@ -1055,6 +1127,8 @@ internal sealed class MainForm : Form
         _liveExpiresAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
+        Volatile.Write(ref _adaptiveFpsEnabled, 0);
+        Interlocked.Exchange(ref _adaptiveFpsLastAdjust, 0);
         Volatile.Write(ref _captureMode, "auto");
         Volatile.Write(ref _captureBackend, "initializing");
         Interlocked.Exchange(ref _captureTelemetryStamp, 0);
