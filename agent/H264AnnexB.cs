@@ -7,6 +7,10 @@ internal static class H264AnnexB
         if (data.Length < 4 || StartCodeLength(data, 0) != 0)
             return data;
 
+        if (data[0] == 1 &&
+            TryNormalizeAvcConfigurationRecord(data, out var configured))
+            return configured;
+
         using var output = new MemoryStream(data.Length + 64);
         var offset = 0;
 
@@ -28,6 +32,55 @@ internal static class H264AnnexB
         }
 
         return offset == data.Length ? output.ToArray() : data;
+    }
+
+    private static bool TryNormalizeAvcConfigurationRecord(
+        ReadOnlySpan<byte> data,
+        out byte[] normalized)
+    {
+        normalized = [];
+        if (data.Length < 7 || data[0] != 1)
+            return false;
+
+        try
+        {
+            using var output = new MemoryStream(data.Length + 32);
+            var offset = 5;
+            var spsCount = data[offset++] & 0x1F;
+
+            for (var i = 0; i < spsCount; i++)
+            {
+                if (offset + 2 > data.Length) return false;
+                var length = (data[offset] << 8) | data[offset + 1];
+                offset += 2;
+                if (length <= 0 || offset + length > data.Length) return false;
+                output.Write([0, 0, 0, 1]);
+                output.Write(data.Slice(offset, length));
+                offset += length;
+            }
+
+            if (offset >= data.Length) return false;
+            var ppsCount = data[offset++];
+
+            for (var i = 0; i < ppsCount; i++)
+            {
+                if (offset + 2 > data.Length) return false;
+                var length = (data[offset] << 8) | data[offset + 1];
+                offset += 2;
+                if (length <= 0 || offset + length > data.Length) return false;
+                output.Write([0, 0, 0, 1]);
+                output.Write(data.Slice(offset, length));
+                offset += length;
+            }
+
+            normalized = output.ToArray();
+            return normalized.Length > 0;
+        }
+        catch
+        {
+            normalized = [];
+            return false;
+        }
     }
 
     public static bool ContainsNalType(ReadOnlySpan<byte> data, int wantedType)
