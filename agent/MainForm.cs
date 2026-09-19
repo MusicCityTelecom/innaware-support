@@ -695,6 +695,28 @@ internal sealed class MainForm : Form
                     SetStatus("Could not send chat message: " + ex.Message, true);
                 }
             };
+            _chatForm.ImageSendRequested += async (_, _) =>
+            {
+                try
+                {
+                    await SendChatImageAsync();
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Could not send chat image: " + ex.Message, true);
+                }
+            };
+            _chatForm.AttachmentOpenRequested += async (_, message) =>
+            {
+                try
+                {
+                    await OpenChatImageAsync(message);
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("Could not open chat image: " + ex.Message, true);
+                }
+            };
         }
 
         _chatForm.SetMessages(_chatMessages);
@@ -792,6 +814,20 @@ internal sealed class MainForm : Form
             ? bodyElement.GetString() ?? ""
             : "";
 
+        var attachmentTransferID = element.TryGetProperty("attachment_transfer_id", out var attachmentIdElement)
+            ? attachmentIdElement.GetString() ?? ""
+            : "";
+        var attachmentName = element.TryGetProperty("attachment_name", out var attachmentNameElement)
+            ? attachmentNameElement.GetString() ?? ""
+            : "";
+        var attachmentMIME = element.TryGetProperty("attachment_mime", out var attachmentMimeElement)
+            ? attachmentMimeElement.GetString() ?? ""
+            : "";
+        var attachmentSize = element.TryGetProperty("attachment_size", out var attachmentSizeElement) &&
+                             attachmentSizeElement.TryGetInt64(out var parsedAttachmentSize)
+            ? parsedAttachmentSize
+            : 0L;
+
         var createdAt = DateTime.UtcNow;
         if (element.TryGetProperty("created_at", out var createdElement) &&
             createdElement.ValueKind == JsonValueKind.String &&
@@ -804,7 +840,7 @@ internal sealed class MainForm : Form
             createdAt = parsedCreated;
         }
 
-        if (body.Length == 0)
+        if (body.Length == 0 && attachmentTransferID.Length == 0)
             return null;
 
         return new SupportChatMessage(
@@ -812,7 +848,106 @@ internal sealed class MainForm : Form
             senderType,
             senderName,
             body,
-            createdAt);
+            createdAt,
+            attachmentTransferID,
+            attachmentName,
+            attachmentMIME,
+            attachmentSize);
+    }
+
+    private async Task SendChatImageAsync()
+    {
+        if (!_requestedFileTransfer ||
+            string.IsNullOrWhiteSpace(_sessionId) ||
+            string.IsNullOrWhiteSpace(_agentToken))
+        {
+            SetStatus("File transfer must be approved before sending chat images.", true);
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Choose an image to send to your technician",
+            Filter = "Images|*.jpg;*.jpeg;*.png;*.gif;*.webp|All files|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        var info = new FileInfo(dialog.FileName);
+        if (info.Length > 5L * 1024 * 1024)
+        {
+            SetStatus("Chat images are limited to 5 MB.", true);
+            return;
+        }
+
+        using var file = File.OpenRead(info.FullName);
+        using var content = new MultipartFormDataContent();
+        using var stream = new StreamContent(file);
+        content.Add(stream, "image", info.Name);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            _options.Server + "/api/agent/chat/images?session=" +
+            Uri.EscapeDataString(_sessionId));
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", _agentToken);
+        request.Content = content;
+
+        using var response = await _http.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            var err = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+            throw new InvalidOperationException(
+                err?.Error ?? $"Image upload failed ({(int)response.StatusCode}).");
+        }
+
+        SetStatus($"Sent image {info.Name} to technician.");
+    }
+
+    private async Task OpenChatImageAsync(SupportChatMessage message)
+    {
+        if (string.IsNullOrWhiteSpace(message.AttachmentTransferID) ||
+            string.IsNullOrWhiteSpace(_sessionId) ||
+            string.IsNullOrWhiteSpace(_agentToken))
+            return;
+
+        var url =
+            _options.Server + "/api/agent/chat/images/" +
+            Uri.EscapeDataString(message.AttachmentTransferID) +
+            "?session=" + Uri.EscapeDataString(_sessionId);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", _agentToken);
+        using var response = await _http.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException("The chat image has expired or is unavailable.");
+
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        var ext = message.AttachmentMIME switch
+        {
+            "image/png" => ".png",
+            "image/gif" => ".gif",
+            "image/webp" => ".webp",
+            _ => ".jpg"
+        };
+
+        var root = Path.Combine(
+            Path.GetTempPath(),
+            "InnAwareSupport",
+            "ChatImages");
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(
+            root,
+            $"chat-{message.ID}-{Guid.NewGuid():N}{ext}");
+        await File.WriteAllBytesAsync(path, bytes);
+
+        Process.Start(new ProcessStartInfo(path)
+        {
+            UseShellExecute = true
+        });
     }
 
     private async Task ResumeElevatedSessionAsync(string resumeFile)
