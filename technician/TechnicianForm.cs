@@ -382,7 +382,14 @@ internal sealed class TechnicianForm : Form
 
     private static string MonitorValue(string value)
     {
-        var digits = new string(value.Where(char.IsDigit).ToArray());
+        const string prefix = "Monitor ";
+        if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return "0";
+
+        var remainder = value[prefix.Length..];
+        var digits = new string(
+            remainder.TakeWhile(char.IsDigit).ToArray());
+
         return int.TryParse(digits, out var monitor) && monitor > 0
             ? (monitor - 1).ToString()
             : "0";
