@@ -172,6 +172,11 @@
               <option value="12">12 FPS</option>
             </select>
           </label>
+          <div class="viewer-view-buttons">
+            <button id="fitViewButton" class="ghost" type="button">Fit</button>
+            <button id="actualViewButton" class="ghost" type="button">1:1</button>
+            <button id="fullscreenButton" class="ghost" type="button">Fullscreen</button>
+          </div>
           <div class="viewer-telemetry">
             <strong id="viewerTelemetry">Waiting for frames</strong>
             <span id="viewerCaptureState">Capture settings pending</span>
@@ -195,6 +200,17 @@
             <div class="sidebar-card">
               <h3>Session details</h3>
               <dl id="sessionFacts" class="facts"></dl>
+            </div>
+            <div id="clipboardCard" class="sidebar-card hidden">
+              <h3>Clipboard text</h3>
+              <p class="small muted">Text only, maximum 256 KB. Clipboard access occurs only when you use these controls.</p>
+              <textarea id="remoteClipboardText" class="clipboard-preview" readonly placeholder="Remote clipboard text will appear here."></textarea>
+              <div class="clipboard-actions">
+                <button id="sendClipboardButton" class="ghost" type="button">Send my clipboard</button>
+                <button id="getClipboardButton" class="ghost" type="button">Get remote</button>
+                <button id="copyRemoteClipboardButton" class="ghost" type="button" disabled>Copy remote</button>
+              </div>
+              <span id="clipboardStatus" class="small muted">Clipboard idle.</span>
             </div>
             <div class="sidebar-card">
               <h3>Technician notes</h3>
@@ -221,6 +237,7 @@
       <div class="dialog-head"><div><p class="eyebrow">NEW SUPPORT SESSION</p><h2>Create a temporary code</h2></div><button type="button" id="closeSessionDialog" class="icon-button" aria-label="Close">×</button></div>
       <label>Customer / property label<input id="customerLabel" maxlength="160" placeholder="Example: Fairfield Inn front desk"></label>
       <label class="check"><input id="requestControl" type="checkbox" checked><span><strong>Keyboard and mouse control</strong><small>Customer will be told that control is requested.</small></span></label>
+      <label class="check"><input id="requestClipboard" type="checkbox" checked><span><strong>Clipboard text sync</strong><small>Allows explicit send/get of text clipboard content during the approved session.</small></span></label>
       <label class="check"><input id="requestElevation" type="checkbox"><span><strong>Administrator elevation may be needed</strong><small>The customer must approve the Windows UAC prompt themselves.</small></span></label>
       <button class="primary" type="submit">Create session</button>
       <p id="sessionError" class="error"></p>
