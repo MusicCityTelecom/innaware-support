@@ -463,7 +463,8 @@ function applyAgentHello(msg){
   state.activeMonitor=Number.isInteger(msg.active_monitor)?msg.active_monitor:0;
   select.value=String(state.activeMonitor);
   if(msg.jpeg_quality) $('qualitySelect').value=String(msg.jpeg_quality);
-  if(msg.fps) $('fpsSelect').value=String(msg.fps);
+  if(msg.adaptive_fps) $('fpsSelect').value='0';
+  else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
