@@ -37,6 +37,7 @@ internal sealed class MainForm : Form
     private int _adaptiveFpsEnabled;
     private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
+    private H264CapabilityInfo? _h264Capability;
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
     private long _captureWindowSent;
@@ -342,6 +343,8 @@ internal sealed class MainForm : Form
             })
             .ToArray();
 
+        _h264Capability ??= H264Capability.Probe();
+
         var hello = JsonSerializer.Serialize(new
         {
             type = "hello",
@@ -357,6 +360,9 @@ internal sealed class MainForm : Form
             fps = Volatile.Read(ref _fps),
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode),
+            h264_hardware_available = _h264Capability.HardwareAvailable,
+            h264_hardware_encoders = _h264Capability.HardwareEncoders,
+            h264_probe_error = _h264Capability.Error,
             live_expires_at = _liveExpiresAtUtc
         });
 
