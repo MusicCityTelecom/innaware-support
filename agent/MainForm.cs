@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -38,6 +39,12 @@ internal sealed class MainForm : Form
     private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private H264CapabilityInfo? _h264Capability;
+    private int _viewerH264Supported;
+    private string _videoTransport = "jpeg";
+    private H264MediaFoundationEncoder? _h264Encoder;
+    private int _h264EncoderMonitor = -1;
+    private int _h264EncoderScale;
+    private int _h264EncoderFps;
     private string _captureBackend = "initializing";
     private byte[]? _lastSentFrame;
     private long _captureWindowSent;
@@ -363,6 +370,7 @@ internal sealed class MainForm : Form
             h264_hardware_available = _h264Capability.HardwareAvailable,
             h264_hardware_encoders = _h264Capability.HardwareEncoders,
             h264_probe_error = _h264Capability.Error,
+            video_transport = Volatile.Read(ref _videoTransport),
             live_expires_at = _liveExpiresAtUtc
         });
 
@@ -541,6 +549,18 @@ internal sealed class MainForm : Form
                          (connectedElement.ValueKind == JsonValueKind.True || connectedElement.ValueKind == JsonValueKind.False))
                 {
                     ApplyViewerStatus(connectedElement.GetBoolean());
+                }
+                else if (type == "viewer_capabilities")
+                {
+                    var supportsH264 =
+                        root.TryGetProperty("h264_webcodecs", out var h264Element) &&
+                        h264Element.ValueKind == JsonValueKind.True;
+                    Volatile.Write(ref _viewerH264Supported, supportsH264 ? 1 : 0);
+                    if (!supportsH264 && Volatile.Read(ref _videoTransport) == "h264-annexb")
+                    {
+                        SetVideoTransport("jpeg");
+                        await SendCaptureSettingsAckAsync(ct);
+                    }
                 }
                 else if (type == "viewer_telemetry")
                 {
@@ -947,6 +967,22 @@ internal sealed class MainForm : Form
             }
         }
 
+        if (root.TryGetProperty("video_transport", out var transportElement))
+        {
+            var requested = string.Equals(
+                transportElement.GetString(),
+                "h264-annexb",
+                StringComparison.OrdinalIgnoreCase)
+                ? "h264-annexb"
+                : "jpeg";
+
+            if (requested == "h264-annexb" &&
+                Volatile.Read(ref _viewerH264Supported) != 1)
+                requested = "jpeg";
+
+            SetVideoTransport(requested);
+        }
+
         if (!IsDisposed && IsHandleCreated)
             BeginInvoke((Action)UpdateDetail);
     }
@@ -1008,7 +1044,9 @@ internal sealed class MainForm : Form
             scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
-            capture_mode = Volatile.Read(ref _captureMode)
+            capture_mode = Volatile.Read(ref _captureMode),
+            video_transport = Volatile.Read(ref _videoTransport),
+            h264_encoder = _h264Encoder?.Name
         });
         await SendTextAsync(message, ct);
     }
@@ -1181,6 +1219,8 @@ internal sealed class MainForm : Form
         _webSocketUrl = null;
         _liveExpiresAtUtc = default;
         _lastSentFrame = null;
+        SetVideoTransport("jpeg");
+        Volatile.Write(ref _viewerH264Supported, 0);
         ScreenCapture.ResetAcceleratedCapture();
         Volatile.Write(ref _scalePercent, 100);
         Volatile.Write(ref _adaptiveFpsEnabled, 0);
@@ -1240,8 +1280,9 @@ internal sealed class MainForm : Form
             : $" · Session expires {_liveExpiresAtUtc.ToLocalTime():g}";
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         var backend = Volatile.Read(ref _captureBackend);
+        var transport = Volatile.Read(ref _videoTransport) == "h264-annexb" ? "H.264" : "JPEG";
         _detail.Text =
-            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · {transport} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)
