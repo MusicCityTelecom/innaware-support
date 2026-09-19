@@ -32,6 +32,7 @@ internal sealed class MainForm : Form
     private DateTime _liveExpiresAtUtc;
     private int _monitorIndex = -1;
     private int _jpegQuality = 55;
+    private int _scalePercent = 100;
     private int _fps = 6;
     private int _adaptiveFpsEnabled;
     private long _adaptiveFpsLastAdjust;
@@ -352,6 +353,7 @@ internal sealed class MainForm : Form
             monitors,
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
+            scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode),
@@ -378,6 +380,7 @@ internal sealed class MainForm : Form
 
                 var monitorIndex = Volatile.Read(ref _monitorIndex);
                 var quality = Volatile.Read(ref _jpegQuality);
+                var scalePercent = Volatile.Read(ref _scalePercent);
                 var fps = Math.Clamp(Volatile.Read(ref _fps), 1, 12);
                 var framePeriodMs = Math.Max(1, 1000 / fps);
                 var captureMode = Volatile.Read(ref _captureMode);
@@ -387,6 +390,7 @@ internal sealed class MainForm : Form
                     monitorIndex,
                     quality,
                     framePeriodMs,
+                    scalePercent,
                     captureMode == "gdi",
                     out var frame,
                     out var backend);
@@ -861,6 +865,19 @@ internal sealed class MainForm : Form
             Volatile.Write(ref _jpegQuality, nextQuality);
         }
 
+        if (root.TryGetProperty("scale_percent", out var scaleElement) && scaleElement.TryGetInt32(out var scalePercent))
+        {
+            var nextScale = scalePercent switch
+            {
+                <= 50 => 50,
+                <= 75 => 75,
+                _ => 100
+            };
+            if (nextScale != Volatile.Read(ref _scalePercent))
+                _lastSentFrame = null;
+            Volatile.Write(ref _scalePercent, nextScale);
+        }
+
         var adaptive = root.TryGetProperty("adaptive_fps", out var adaptiveElement) &&
                        adaptiveElement.ValueKind == JsonValueKind.True;
         if (root.TryGetProperty("fps", out var fpsElement) && fpsElement.TryGetInt32(out var fps))
@@ -951,6 +968,7 @@ internal sealed class MainForm : Form
             type = "capture_settings",
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
+            scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode)
@@ -1127,6 +1145,7 @@ internal sealed class MainForm : Form
         _liveExpiresAtUtc = default;
         _lastSentFrame = null;
         ScreenCapture.ResetAcceleratedCapture();
+        Volatile.Write(ref _scalePercent, 100);
         Volatile.Write(ref _adaptiveFpsEnabled, 0);
         Interlocked.Exchange(ref _adaptiveFpsLastAdjust, 0);
         Volatile.Write(ref _captureMode, "auto");
@@ -1185,7 +1204,7 @@ internal sealed class MainForm : Form
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         var backend = Volatile.Read(ref _captureBackend);
         _detail.Text =
-            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)
