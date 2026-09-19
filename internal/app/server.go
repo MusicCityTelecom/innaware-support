@@ -657,6 +657,28 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 				_ = s.hub.sendToTech(id, websocket.TextMessage, normalized)
 				continue
 			}
+			if envelope.Type == "elevation_status" {
+				if len(data) <= 8*1024 {
+					var payload struct {
+						Status string `json:"status"`
+					}
+					if json.Unmarshal(data, &payload) == nil {
+						status := strings.ToLower(strings.TrimSpace(payload.Status))
+						switch status {
+						case "requested", "declined", "uac_cancelled", "restarting", "elevated", "failed":
+							s.store.AddEvent(
+								r.Context(),
+								id,
+								"customer",
+								"elevation_"+status,
+								"",
+							)
+							_ = s.hub.sendToTech(id, websocket.TextMessage, data)
+						}
+					}
+				}
+				continue
+			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
 				log.Printf("forward agent->tech session=%s: %v", id, err)
 			}
@@ -781,6 +803,40 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 				"",
 				s.clientIP(r),
 			)
+			continue
+		}
+		if envelope.Type == "elevation_request" {
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(r.Context(), id, admin.Username, "elevation_requested", "")
+			s.store.AddAdminAudit(
+				r.Context(),
+				&admin.ID,
+				admin.Username,
+				"elevation_requested",
+				"session",
+				id,
+				"",
+				s.clientIP(r),
+			)
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"elevation_request"}`)); err != nil {
+				log.Printf("forward elevation request session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "recording_status" {
+			var payload struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			status := strings.ToLower(strings.TrimSpace(payload.Status))
+			if status != "started" && status != "stopped" {
+				continue
+			}
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(r.Context(), id, admin.Username, "recording_"+status, "technician-side recording")
+			_ = s.hub.sendToAgent(id, websocket.TextMessage, data)
 			continue
 		}
 	}
