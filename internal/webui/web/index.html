@@ -244,7 +244,11 @@
               </div>
               <form id="chatForm" class="chat-form">
                 <textarea id="chatBody" maxlength="4000" placeholder="Type a message to the customer…"></textarea>
-                <button class="primary" type="submit">Send</button>
+                <div class="chat-compose-actions">
+                  <input id="chatImageInput" class="hidden" type="file" accept="image/jpeg,image/png,image/gif,image/webp">
+                  <button id="chatImageButton" class="ghost" type="button">Attach image</button>
+                  <button class="primary" type="submit">Send</button>
+                </div>
               </form>
             </div>
             <div id="fileTransferCard" class="sidebar-card hidden">
