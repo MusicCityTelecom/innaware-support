@@ -14,6 +14,8 @@ internal sealed class LookupResponse
     [JsonPropertyName("customer_label")] public string CustomerLabel { get; set; } = "";
     [JsonPropertyName("requested_control")] public bool RequestedControl { get; set; }
     [JsonPropertyName("requested_elevation")] public bool RequestedElevation { get; set; }
+    [JsonPropertyName("requested_clipboard")] public bool RequestedClipboard { get; set; }
+    [JsonPropertyName("requested_file_transfer")] public bool RequestedFileTransfer { get; set; }
     [JsonPropertyName("expires_at")] public DateTime ExpiresAt { get; set; }
 }
 
