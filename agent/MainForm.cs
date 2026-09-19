@@ -16,6 +16,7 @@ internal sealed class MainForm : Form
     private readonly Button _connect = new();
     private readonly Button _elevate = new();
     private readonly Button _disconnect = new();
+    private readonly Button _sendFile = new();
     private readonly Label _status = new();
     private readonly Label _detail = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -23,6 +24,8 @@ internal sealed class MainForm : Form
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _sessionCts;
     private bool _requestedControl;
+    private bool _requestedClipboard;
+    private bool _requestedFileTransfer;
     private string? _sessionId;
     private string? _agentToken;
     private string? _webSocketUrl;
@@ -119,6 +122,15 @@ internal sealed class MainForm : Form
         _disconnect.Visible = false;
         _disconnect.Click += async (_, _) => await EndSessionFromCustomerAsync();
 
+        _sendFile.SetBounds(271, 302, 220, 45);
+        _sendFile.Text = "Send File to Technician";
+        _sendFile.BackColor = Color.FromArgb(234, 240, 247);
+        _sendFile.ForeColor = Color.FromArgb(20, 49, 82);
+        _sendFile.FlatStyle = FlatStyle.Flat;
+        _sendFile.FlatAppearance.BorderSize = 0;
+        _sendFile.Visible = false;
+        _sendFile.Click += async (_, _) => await SendFileToTechnicianAsync();
+
         _status.SetBounds(36, 361, 455, 22);
         _status.Text = "Not connected";
         _status.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
@@ -129,7 +141,7 @@ internal sealed class MainForm : Form
         _detail.ForeColor = Color.FromArgb(120, 132, 145);
         _detail.Font = new Font("Segoe UI", 8F);
 
-        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _status, _detail]);
+        panel.Controls.AddRange([brand, subtitle, intro, codeLabel, _code, _terms, _connect, _elevate, _disconnect, _sendFile, _status, _detail]);
     }
 
     private static void StylePrimary(Button b)
@@ -166,9 +178,14 @@ internal sealed class MainForm : Form
                 new LookupRequest { Code = code },
                 CancellationToken.None);
 
-            var permissions = lookup.RequestedControl
-                ? "view your screen and control your keyboard and mouse"
-                : "view your screen";
+            var requestedAccess = new List<string> { "view your screen" };
+            if (lookup.RequestedControl)
+                requestedAccess.Add("control your keyboard and mouse");
+            if (lookup.RequestedClipboard)
+                requestedAccess.Add("read and set text in your Windows clipboard");
+            if (lookup.RequestedFileTransfer)
+                requestedAccess.Add("send and receive files you explicitly approve (up to 25 MB each)");
+            var permissions = string.Join(", ", requestedAccess);
             var elevation = lookup.RequestedElevation
                 ? "\n\nThe technician indicated that Administrator access may be needed. Windows will still require you to approve any UAC elevation prompt locally."
                 : "";
@@ -217,6 +234,8 @@ internal sealed class MainForm : Form
                 CancellationToken.None);
 
             _requestedControl = lookup.RequestedControl;
+            _requestedClipboard = lookup.RequestedClipboard;
+            _requestedFileTransfer = lookup.RequestedFileTransfer;
             await ConnectWebSocketAsync(
                 redeem.WebSocketUrl,
                 redeem.AgentToken,
@@ -262,6 +281,8 @@ internal sealed class MainForm : Form
         BeginInvoke((Action)(() =>
         {
             _disconnect.Visible = true;
+            _sendFile.Visible = _requestedFileTransfer;
+            _disconnect.SetBounds(36, 302, _requestedFileTransfer ? 220 : 455, 45);
             _connect.Visible = false;
             _elevate.Visible = false;
             _code.Enabled = false;
@@ -315,6 +336,8 @@ internal sealed class MainForm : Form
             machine_name = Environment.MachineName,
             elevated = Program.IsAdministrator(),
             control = _requestedControl,
+            clipboard = _requestedClipboard,
+            file_transfer = _requestedFileTransfer,
             monitors,
             active_monitor = Volatile.Read(ref _monitorIndex),
             jpeg_quality = Volatile.Read(ref _jpegQuality),
@@ -417,6 +440,36 @@ internal sealed class MainForm : Form
                 {
                     ApplyViewerStatus(connectedElement.GetBoolean());
                 }
+                else if (type == "clipboard_set" && _requestedClipboard &&
+                         root.TryGetProperty("text", out var clipboardTextElement))
+                {
+                    var text = clipboardTextElement.GetString() ?? "";
+                    if (Encoding.UTF8.GetByteCount(text) <= 262144)
+                    {
+                        await SetClipboardTextAsync(text);
+                        await SendTextAsync(JsonSerializer.Serialize(new
+                        {
+                            type = "clipboard_status",
+                            action = "set",
+                            ok = true,
+                            length = text.Length
+                        }), ct);
+                    }
+                }
+                else if (type == "clipboard_get" && _requestedClipboard)
+                {
+                    var text = ClampUtf8Text(await GetClipboardTextAsync(), 262144);
+                    await SendTextAsync(JsonSerializer.Serialize(new
+                    {
+                        type = "clipboard_data",
+                        text,
+                        length = text.Length
+                    }), ct);
+                }
+                else if (type == "file_offer" && _requestedFileTransfer)
+                {
+                    await HandleIncomingFileOfferAsync(root, ct);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -425,6 +478,250 @@ internal sealed class MainForm : Form
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
                 _ = ScheduleReconnectAsync("Connection interrupted.", ct);
         }
+    }
+
+    private static string ClampUtf8Text(string text, int maxBytes)
+    {
+        if (Encoding.UTF8.GetByteCount(text) <= maxBytes) return text;
+
+        var low = 0;
+        var high = text.Length;
+        while (low < high)
+        {
+            var mid = low + (high - low + 1) / 2;
+            if (Encoding.UTF8.GetByteCount(text.AsSpan(0, mid)) <= maxBytes)
+                low = mid;
+            else
+                high = mid - 1;
+        }
+
+        if (low > 0 && low < text.Length &&
+            char.IsHighSurrogate(text[low - 1]) && char.IsLowSurrogate(text[low]))
+            low--;
+
+        return text[..low];
+    }
+
+    private async Task SendFileToTechnicianAsync()
+    {
+        if (!_requestedFileTransfer || string.IsNullOrWhiteSpace(_sessionId) || string.IsNullOrWhiteSpace(_agentToken))
+            return;
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Choose a file to send to your technician",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+        var info = new FileInfo(dialog.FileName);
+        if (info.Length > 25L * 1024 * 1024)
+        {
+            SetStatus("That file exceeds the 25 MB transfer limit.", true);
+            return;
+        }
+
+        _sendFile.Enabled = false;
+        SetStatus($"Uploading {info.Name} to technician…");
+
+        try
+        {
+            using var file = File.OpenRead(info.FullName);
+            using var content = new MultipartFormDataContent();
+            using var stream = new StreamContent(file);
+            stream.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            content.Add(stream, "file", info.Name);
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                _options.Server + "/api/agent/files?session=" + Uri.EscapeDataString(_sessionId));
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _agentToken);
+            request.Content = content;
+
+            using var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var err = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+                throw new InvalidOperationException(err?.Error ?? $"Upload failed ({(int)response.StatusCode}).");
+            }
+
+            SetStatus($"Sent {info.Name} to technician.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("File transfer failed: " + ex.Message, true);
+        }
+        finally
+        {
+            _sendFile.Enabled = true;
+        }
+    }
+
+    private async Task HandleIncomingFileOfferAsync(JsonElement root, CancellationToken ct)
+    {
+        if (!root.TryGetProperty("transfer_id", out var idElement)) return;
+        var transferId = idElement.GetString() ?? "";
+        if (transferId == "") return;
+
+        var name = root.TryGetProperty("name", out var nameElement)
+            ? Path.GetFileName(nameElement.GetString() ?? "support-file.bin")
+            : "support-file.bin";
+        var size = root.TryGetProperty("size", out var sizeElement) && sizeElement.TryGetInt64(out var parsedSize)
+            ? parsedSize
+            : 0L;
+
+        var savePath = await PromptForIncomingFileAsync(name, size);
+        if (savePath is null)
+        {
+            await SendFileStatusAsync(transferId, name, "declined", ct);
+            return;
+        }
+
+        try
+        {
+            SetStatus($"Downloading {name}…");
+
+            var sessionId = _sessionId ?? throw new InvalidOperationException("Session is unavailable.");
+            var token = _agentToken ?? throw new InvalidOperationException("Session credential is unavailable.");
+            var url = _options.Server + "/api/agent/files/" + Uri.EscapeDataString(transferId) +
+                      "?session=" + Uri.EscapeDataString(sessionId);
+
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            response.EnsureSuccessStatusCode();
+
+            var tempPath = savePath + ".innaware-part-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                await using (var output = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                await using (var input = await response.Content.ReadAsStreamAsync(ct))
+                {
+                    await input.CopyToAsync(output, ct);
+                }
+
+                File.Move(tempPath, savePath, true);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+
+            await SendFileStatusAsync(transferId, name, "saved", ct);
+            SetStatus($"Saved {name}.");
+        }
+        catch (Exception ex)
+        {
+            try { await SendFileStatusAsync(transferId, name, "failed", ct); } catch { }
+            SetStatus("File download failed: " + ex.Message, true);
+        }
+    }
+
+    private Task<string?> PromptForIncomingFileAsync(string name, long size)
+    {
+        var tcs = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (IsDisposed || !IsHandleCreated)
+        {
+            tcs.SetResult(null);
+            return tcs.Task;
+        }
+
+        BeginInvoke((Action)(() =>
+        {
+            var sizeText = size >= 1024 * 1024
+                ? $"{size / (1024d * 1024d):0.00} MB"
+                : $"{Math.Max(0, size) / 1024d:0.0} KB";
+
+            var answer = MessageBox.Show(
+                this,
+                $"Your technician wants to send this file:\n\n{name}\n{sizeText}\n\nChoose Yes to select where to save it.",
+                "Incoming Support File",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2);
+
+            if (answer != DialogResult.Yes)
+            {
+                tcs.SetResult(null);
+                return;
+            }
+
+            using var save = new SaveFileDialog
+            {
+                Title = "Save support file",
+                FileName = name,
+                OverwritePrompt = true
+            };
+            tcs.SetResult(save.ShowDialog(this) == DialogResult.OK ? save.FileName : null);
+        }));
+
+        return tcs.Task;
+    }
+
+    private Task SendFileStatusAsync(string transferId, string name, string status, CancellationToken ct)
+    {
+        return SendTextAsync(JsonSerializer.Serialize(new
+        {
+            type = "file_status",
+            transfer_id = transferId,
+            name,
+            status
+        }), ct);
+    }
+
+    private Task<string> GetClipboardTextAsync()
+    {
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (IsDisposed || !IsHandleCreated)
+        {
+            tcs.SetResult("");
+            return tcs.Task;
+        }
+
+        BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                var text = Clipboard.ContainsText(TextDataFormat.UnicodeText)
+                    ? Clipboard.GetText(TextDataFormat.UnicodeText)
+                    : "";
+                tcs.SetResult(text);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        }));
+
+        return tcs.Task;
+    }
+
+    private Task SetClipboardTextAsync(string text)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (IsDisposed || !IsHandleCreated)
+        {
+            tcs.SetResult(true);
+            return tcs.Task;
+        }
+
+        BeginInvoke((Action)(() =>
+        {
+            try
+            {
+                Clipboard.SetDataObject(text, true, 5, 100);
+                tcs.SetResult(true);
+            }
+            catch (Exception ex)
+            {
+                tcs.SetException(ex);
+            }
+        }));
+
+        return tcs.Task;
     }
 
     private void ApplyViewerStatus(bool connected)
@@ -645,6 +942,8 @@ internal sealed class MainForm : Form
             BeginInvoke((Action)(() =>
             {
                 _disconnect.Visible = false;
+                _sendFile.Visible = false;
+                _disconnect.SetBounds(36, 302, 455, 45);
                 _connect.Visible = true;
                 _elevate.Visible = true;
                 _code.Enabled = true;

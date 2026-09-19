@@ -50,7 +50,8 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 - selectable single-monitor viewing, but no simultaneous multi-monitor/composite desktop mode yet;
 - JPEG framebuffer stream rather than DXGI/H.264;
 - adjustable 1–12 FPS capture (6 FPS default) and adjustable JPEG quality;
-- no file transfer or clipboard sync yet;
+- text clipboard sync is available only when explicitly requested for the session;
+- bidirectional file transfer is explicit, temporary, and limited to 25 MB per file;
 - no secure-desktop/UAC prompt control;
 - no Ctrl+Alt+Del injection;
 - no permanent service/unattended access;

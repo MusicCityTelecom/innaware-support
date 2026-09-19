@@ -91,7 +91,7 @@ func (s *Store) SearchSessions(ctx context.Context, q SessionQuery) (SessionSear
 		return SessionSearchResult{}, err
 	}
 	query := `SELECT id, code_hint, customer_label, technician_name, technician_id, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions WHERE ` + clause + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	pageArgs := append(append([]any{}, args...), q.Limit, q.Offset)
@@ -104,7 +104,7 @@ func (s *Store) SearchSessions(ctx context.Context, q SessionQuery) (SessionSear
 	for rows.Next() {
 		var x Session
 		if err := rows.Scan(&x.ID, &x.CodeHint, &x.CustomerLabel, &x.TechnicianName, &x.TechnicianID, &x.Status,
-			&x.RequestedControl, &x.RequestedElevation, &x.TermsAccepted, &x.MachineName,
+			&x.RequestedControl, &x.RequestedElevation, &x.RequestedClipboard, &x.RequestedFileTransfer, &x.TermsAccepted, &x.MachineName,
 			&x.AgentTokenHash, &x.CreatedAt, &x.ExpiresAt, &x.RedeemedAt, &x.ConnectedAt, &x.EndedAt); err != nil {
 			return SessionSearchResult{}, err
 		}
@@ -177,12 +177,12 @@ func (s *Store) ListSessionNotes(ctx context.Context, sessionID string) ([]Sessi
 
 func (s *Store) GetSessionWithTechnician(ctx context.Context, id string) (Session, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, code_hint, customer_label, technician_name, technician_id, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions WHERE id=?`, id)
 	var x Session
 	if err := row.Scan(&x.ID, &x.CodeHint, &x.CustomerLabel, &x.TechnicianName, &x.TechnicianID, &x.Status,
-		&x.RequestedControl, &x.RequestedElevation, &x.TermsAccepted, &x.MachineName,
+		&x.RequestedControl, &x.RequestedElevation, &x.RequestedClipboard, &x.RequestedFileTransfer, &x.TermsAccepted, &x.MachineName,
 		&x.AgentTokenHash, &x.CreatedAt, &x.ExpiresAt, &x.RedeemedAt, &x.ConnectedAt, &x.EndedAt); err != nil {
 		return Session{}, err
 	}

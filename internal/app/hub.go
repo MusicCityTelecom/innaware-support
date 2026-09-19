@@ -98,6 +98,13 @@ func (h *Hub) hasTech(id string) bool {
 	return r != nil && r.tech != nil
 }
 
+func (h *Hub) hasAgent(id string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	r := h.rooms[id]
+	return r != nil && r.agent != nil
+}
+
 func (h *Hub) sendToTech(id string, messageType int, data []byte) error {
 	h.mu.RLock()
 	var p *wsPeer

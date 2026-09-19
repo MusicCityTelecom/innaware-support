@@ -5,6 +5,7 @@ const state = {
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
   monitors: [], activeMonitor: 0,
   frameWindowStart: 0, frameCount: 0, frameBytes: 0,
+  viewMode: 'fit', remoteClipboard: '',
   historyOffset: 0, historyLimit: 50, historyTotal: 0
 };
 
@@ -38,7 +39,7 @@ function setAuthUI(loggedIn) {
   show('logoutButton', loggedIn);
   show('accountButton', loggedIn);
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !loggedIn || !isAdmin()));
-  $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} Â· ${state.me.role}` : '';
+  $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} · ${state.me.role}` : '';
   if (!loggedIn) {
     switchTab('sessions', false);
   }
@@ -132,7 +133,7 @@ async function loadMetrics() {
     $('connectedMetric').textContent = m.connected ?? 0;
     $('todayMetric').textContent = m.created_today ?? 0;
     $('weekMetric').textContent = m.ended_seven_days ?? 0;
-    $('avgMetric').textContent = m.average_minutes > 0 ? `${Math.round(m.average_minutes)}m` : 'â';
+    $('avgMetric').textContent = m.average_minutes > 0 ? `${Math.round(m.average_minutes)}m` : '—';
   } catch (e) { console.error(e); }
 }
 
@@ -252,6 +253,8 @@ $('sessionForm').addEventListener('submit', async event => {
       body:{
         customer_label:$('customerLabel').value,
         requested_control:$('requestControl').checked,
+        requested_clipboard:$('requestClipboard').checked,
+        requested_file_transfer:$('requestFileTransfer').checked,
         requested_elevation:$('requestElevation').checked
       }
     });
@@ -261,6 +264,8 @@ $('sessionForm').addEventListener('submit', async event => {
     $('codeDialog').showModal();
     $('customerLabel').value='';
     $('requestControl').checked=true;
+    $('requestClipboard').checked=true;
+    $('requestFileTransfer').checked=true;
     $('requestElevation').checked=false;
     await Promise.all([loadMetrics(), loadSessions()]);
   } catch (e) { $('sessionError').textContent=e.message; }
@@ -292,7 +297,17 @@ async function openViewer(id) {
     const active = ['waiting','approved','connected'].includes(state.session.status);
     $('endSessionButton').classList.toggle('hidden', !active);
     $('viewerControls').classList.toggle('hidden', !active);
+    show('clipboardCard', active && !!state.session.requested_clipboard);
+    show('fileTransferCard', active && !!state.session.requested_file_transfer);
+    $('sendFileInput').value='';
+    $('incomingFiles').textContent='';
+    $('fileTransferStatus').textContent='No active transfer.';
+    $('remoteClipboardText').value='';
+    $('clipboardStatus').textContent='Clipboard idle.';
+    $('copyRemoteClipboardButton').disabled=true;
+    state.remoteClipboard='';
     resetCaptureTelemetry();
+    setViewMode('fit');
     if (active) connectViewerWS(id);
     else {
       $('screenPlaceholder').querySelector('strong').textContent = 'Session complete';
@@ -312,7 +327,9 @@ function resetViewerCanvas() {
 }
 function closeViewer(){
   if(state.ws){state.ws.close();state.ws=null;}
+  if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   state.session=null;
+  state.remoteClipboard='';
   show('viewerView',false);
   show('consoleView',true);
   show('publicView',true);
@@ -343,6 +360,8 @@ function renderSessionDetail() {
     ['Expires', escapeHTML(formatDate(s.expires_at))],
     ['Duration', escapeHTML(duration)],
     ['Control', s.requested_control ? 'Requested' : 'View only'],
+    ['Clipboard', s.requested_clipboard ? 'Enabled' : 'No'],
+    ['File transfer', s.requested_file_transfer ? 'Enabled' : 'No'],
     ['Elevation', s.requested_elevation ? 'May be needed' : 'No']
   ].map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   renderNotes();
@@ -354,7 +373,7 @@ function renderNotes() {
 }
 function renderTimeline() {
   const events = state.session?.events || [];
-  $('sessionTimeline').innerHTML = events.length ? events.map(e => `<div class="timeline-item"><div class="timeline-meta"><span>${escapeHTML(formatDate(e.created_at))}</span><span>${escapeHTMK(e.actor)}</span></div><strong>${escapeHTML(prettyEvent(e.event))}</strong>${e.details ? `<span>${escapeHTML(e.details)}</span>` : ''}</div>`).join('') : '<div class="muted small">No timeline events recorded.</div>';
+  $('sessionTimeline').innerHTML = events.length ? events.map(e => `<div class="timeline-item"><div class="timeline-meta"><span>${escapeHTML(formatDate(e.created_at))}</span><span>${escapeHTML(e.actor)}</span></div><strong>${escapeHTML(prettyEvent(e.event))}</strong>${e.details ? `<span>${escapeHTML(e.details)}</span>` : ''}</div>`).join('') : '<div class="muted small">No timeline events recorded.</div>';
 }
 $('noteForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -394,6 +413,26 @@ function connectViewerWS(id){
           applyAgentHello(msg);
         }
         if(msg.type==='capture_settings') applyCaptureSettingsAck(msg);
+        if(msg.type==='clipboard_data'){
+          const text=typeof msg.text==='string'?msg.text:'';
+          state.remoteClipboard=text;
+          $('remoteClipboardText').value=text;
+          $('copyRemoteClipboardButton').disabled=false;
+          $('clipboardStatus').textContent=`Received ${text.length.toLocaleString()} characters from remote clipboard.`;
+        }
+        if(msg.type==='clipboard_status'){
+          $('clipboardStatus').textContent=msg.ok===false
+            ? 'Remote clipboard operation failed.'
+            : `Remote clipboard updated (${Number(msg.length)||0} characters).`;
+        }
+        if(msg.type==='file_offer' && msg.direction==='to_tech'){
+          addIncomingFile(msg);
+        }
+        if(msg.type==='file_status'){
+          const name=msg.name?String(msg.name):'file';
+          const status=msg.status?String(msg.status):'updated';
+          $('fileTransferStatus').textContent=`${name}: ${status}`;
+        }
       }catch{}
       return;
     }
@@ -431,7 +470,7 @@ function applyAgentHello(msg){
   if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.live_expires_at && state.session) state.session.expires_at=msg.live_expires_at;
   renderSessionDetail();
-  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}`;
+  $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
 }
 
 function applyCaptureSettingsAck(msg){
@@ -479,6 +518,124 @@ function updateFrameTelemetry(bytes){
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
+
+function setViewMode(mode){
+  state.viewMode=mode==='actual'?'actual':'fit';
+  const wrap=$('screenWrap');
+  wrap.classList.toggle('fit-mode',state.viewMode==='fit');
+  wrap.classList.toggle('actual-mode',state.viewMode==='actual');
+  $('fitViewButton').disabled=state.viewMode==='fit';
+  $('actualViewButton').disabled=state.viewMode==='actual';
+}
+
+$('fitViewButton').addEventListener('click',()=>setViewMode('fit'));
+$('actualViewButton').addEventListener('click',()=>setViewMode('actual'));
+$('fullscreenButton').addEventListener('click',async()=>{
+  try{
+    if(document.fullscreenElement) await document.exitFullscreen();
+    else await $('screenWrap').requestFullscreen();
+  }catch(e){alert('Fullscreen could not be opened: '+e.message);}
+});
+document.addEventListener('fullscreenchange',()=>{
+  $('fullscreenButton').textContent=document.fullscreenElement?'Exit fullscreen':'Fullscreen';
+});
+
+function sendViewerMessage(message){
+  if(!state.ws||state.ws.readyState!==WebSocket.OPEN)throw new Error('Remote session is not connected.');
+  state.ws.send(JSON.stringify(message));
+}
+
+$('sendClipboardButton').addEventListener('click',async()=>{
+  if(!state.session?.requested_clipboard)return;
+  try{
+    if(!navigator.clipboard?.readText)throw new Error('Browser clipboard read is unavailable.');
+    const text=await navigator.clipboard.readText();
+    const bytes=new TextEncoder().encode(text).byteLength;
+    if(bytes>262144)throw new Error('Clipboard text exceeds the 256 KiB session limit.');
+    sendViewerMessage({type:'clipboard_set',text});
+    $('clipboardStatus').textContent=`Sending ${text.length.toLocaleString()} characters (${formatBytes(bytes)}) to remote clipboard…`;
+  }catch(e){
+    $('clipboardStatus').textContent='Could not read local clipboard: '+e.message;
+  }
+});
+
+$('getClipboardButton').addEventListener('click',()=>{
+  if(!state.session?.requested_clipboard)return;
+  try{
+    sendViewerMessage({type:'clipboard_get'});
+    $('clipboardStatus').textContent='Requesting remote clipboard…';
+  }catch(e){
+    $('clipboardStatus').textContent=e.message;
+  }
+});
+
+$('copyRemoteClipboardButton').addEventListener('click',async()=>{
+  try{
+    if(!navigator.clipboard?.writeText)throw new Error('Browser clipboard write is unavailable.');
+    await navigator.clipboard.writeText(state.remoteClipboard||'');
+    $('clipboardStatus').textContent=`Copied ${(state.remoteClipboard||'').length.toLocaleString()} remote characters to local clipboard.`;
+  }catch(e){
+    $('clipboardStatus').textContent='Could not write local clipboard: '+e.message;
+  }
+});
+
+function formatBytes(value){
+  const n=Number(value)||0;
+  if(n<1024)return `${n} B`;
+  if(n<1024*1024)return `${(n/1024).toFixed(1)} KB`;
+  return `${(n/(1024*1024)).toFixed(2)} MB`;
+}
+
+function addIncomingFile(msg){
+  if(!state.session||!state.session.requested_file_transfer)return;
+  const transferId=String(msg.transfer_id||'');
+  if(!transferId)return;
+  const name=String(msg.name||'support-file.bin');
+  const row=document.createElement('div');
+  row.className='incoming-file';
+  const strong=document.createElement('strong');
+  strong.textContent=name;
+  const meta=document.createElement('span');
+  meta.textContent=`${formatBytes(msg.size)} · available until ${formatDate(msg.expires_at)}`;
+  const link=document.createElement('a');
+  link.href=`/api/sessions/${encodeURIComponent(state.session.id)}/files/${encodeURIComponent(transferId)}`;
+  link.textContent='Download from customer';
+  link.setAttribute('download',name);
+  row.append(strong,meta,link);
+  $('incomingFiles').prepend(row);
+  $('fileTransferStatus').textContent=`Customer offered ${name}.`;
+}
+
+$('sendFileButton').addEventListener('click',async()=>{
+  if(!state.session?.requested_file_transfer)return;
+  const file=$('sendFileInput').files?.[0];
+  if(!file){
+    $('fileTransferStatus').textContent='Choose a file first.';
+    return;
+  }
+  if(file.size>25*1024*1024){
+    $('fileTransferStatus').textContent='File exceeds the 25 MB limit.';
+    return;
+  }
+  const form=new FormData();
+  form.append('file',file,file.name);
+  $('sendFileButton').disabled=true;
+  $('fileTransferStatus').textContent=`Uploading ${file.name} (${formatBytes(file.size)})…`;
+  try{
+    const response=await fetch(
+      `/api/sessions/${encodeURIComponent(state.session.id)}/files`,
+      {method:'POST',body:form,credentials:'same-origin'}
+    );
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(data.error||`Upload failed (${response.status})`);
+    $('fileTransferStatus').textContent=`Offered ${file.name} to customer. Waiting for their save decision.`;
+    $('sendFileInput').value='';
+  }catch(e){
+    $('fileTransferStatus').textContent=e.message;
+  }finally{
+    $('sendFileButton').disabled=false;
+  }
+});
 
 function sendInput(input){
   if(!state.ws||state.ws.readyState!==WebSocket.OPEN||!state.session?.requested_control)return;
@@ -574,9 +731,9 @@ function renderAudit(){
   }
 }
 
-function formatDate(v){if(!v)return 'â';const d=new Date(v);return Number.isNaN(d.getTime())?'â':d.toLocaleString();}
+function formatDate(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleString();}
 function sessionDuration(s){
-  if(!s.connected_at)return 'â';
+  if(!s.connected_at)return '—';
   const end=s.ended_at?new Date(s.ended_at):new Date();
   const start=new Date(s.connected_at);
   const sec=Math.max(0,Math.round((end-start)/1000));

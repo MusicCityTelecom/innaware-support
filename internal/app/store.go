@@ -17,9 +17,11 @@ type Session struct {
 	TechnicianName     string     `json:"technician_name"`
 	TechnicianID       *int64     `json:"technician_id,omitempty"`
 	Status             string     `json:"status"`
-	RequestedControl   bool       `json:"requested_control"`
-	RequestedElevation bool       `json:"requested_elevation"`
-	TermsAccepted      bool       `json:"terms_accepted"`
+	RequestedControl      bool       `json:"requested_control"`
+	RequestedElevation    bool       `json:"requested_elevation"`
+	RequestedClipboard    bool       `json:"requested_clipboard"`
+	RequestedFileTransfer bool       `json:"requested_file_transfer"`
+	TermsAccepted         bool       `json:"terms_accepted"`
 	MachineName        string     `json:"machine_name"`
 	AgentTokenHash     string     `json:"-"`
 	CreatedAt          time.Time  `json:"created_at"`
@@ -95,6 +97,8 @@ func (s *Store) migrate(ctx context.Context) error {
 			status VARCHAR(24) NOT NULL,
 			requested_control BOOLEAN NOT NULL DEFAULT TRUE,
 			requested_elevation BOOLEAN NOT NULL DEFAULT FALSE,
+			requested_clipboard BOOLEAN NOT NULL DEFAULT FALSE,
+			requested_file_transfer BOOLEAN NOT NULL DEFAULT FALSE,
 			terms_accepted BOOLEAN NOT NULL DEFAULT FALSE,
 			machine_name VARCHAR(255) NOT NULL DEFAULT '',
 			agent_token_hash CHAR(64) NULL,
@@ -129,10 +133,10 @@ func (s *Store) migrate(ctx context.Context) error {
 func (s *Store) CreateSession(ctx context.Context, session Session, codeHash string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO support_sessions
 		(id, code_hash, code_hint, customer_label, technician_name, status,
-		 requested_control, requested_elevation, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?)`,
+		 requested_control, requested_elevation, requested_clipboard, requested_file_transfer, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?)`,
 		session.ID, codeHash, session.CodeHint, session.CustomerLabel, session.TechnicianName,
-		session.RequestedControl, session.RequestedElevation, session.CreatedAt, session.ExpiresAt)
+		session.RequestedControl, session.RequestedElevation, session.RequestedClipboard, session.RequestedFileTransfer, session.CreatedAt, session.ExpiresAt)
 	return err
 }
 
@@ -148,7 +152,7 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) 
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id, code_hint, customer_label, technician_name, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions ORDER BY created_at DESC LIMIT ?`, limit)
 	if err != nil {
@@ -168,7 +172,7 @@ func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) 
 
 func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, code_hint, customer_label, technician_name, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions WHERE id=?`, id)
 	var x Session
@@ -182,13 +186,13 @@ type scanner interface{ Scan(dest ...any) error }
 
 func scanSession(row scanner, x *Session) error {
 	return row.Scan(&x.ID, &x.CodeHint, &x.CustomerLabel, &x.TechnicianName, &x.Status,
-		&x.RequestedControl, &x.RequestedElevation, &x.TermsAccepted, &x.MachineName,
+		&x.RequestedControl, &x.RequestedElevation, &x.RequestedClipboard, &x.RequestedFileTransfer, &x.TermsAccepted, &x.MachineName,
 		&x.AgentTokenHash, &x.CreatedAt, &x.ExpiresAt, &x.RedeemedAt, &x.ConnectedAt, &x.EndedAt)
 }
 
 func (s *Store) LookupByCodeHash(ctx context.Context, codeHash string) (Session, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, code_hint, customer_label, technician_name, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions WHERE code_hash=? AND status='waiting' AND expires_at > UTC_TIMESTAMP(6)`, codeHash)
 	var x Session
@@ -205,7 +209,7 @@ func (s *Store) RedeemSession(ctx context.Context, codeHash, tokenHash, machineN
 	}
 	defer tx.Rollback()
 	row := tx.QueryRowContext(ctx, `SELECT id, code_hint, customer_label, technician_name, status,
-		requested_control, requested_elevation, terms_accepted, machine_name,
+		requested_control, requested_elevation, requested_clipboard, requested_file_transfer, terms_accepted, machine_name,
 		COALESCE(agent_token_hash,''), created_at, expires_at, redeemed_at, connected_at, ended_at
 		FROM support_sessions WHERE code_hash=? FOR UPDATE`, codeHash)
 	var x Session

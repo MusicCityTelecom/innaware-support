@@ -22,10 +22,13 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const maxClipboardBytes = 256 * 1024
+
 type Server struct {
 	cfg          Config
 	store        *Store
 	hub          *Hub
+	transfers    *TransferStore
 	mux          *http.ServeMux
 	agentLimiter *limiter
 	loginLimiter *limiter
@@ -37,6 +40,7 @@ func NewServer(cfg Config, store *Store) *Server {
 		cfg:          cfg,
 		store:        store,
 		hub:          NewHub(),
+		transfers:    NewTransferStore(),
 		mux:          http.NewServeMux(),
 		agentLimiter: newLimiter(12, 10*time.Minute),
 		loginLimiter: newLimiter(10, 15*time.Minute),
@@ -69,6 +73,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/sessions/{id}", s.requireTech(s.handleGetSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/end", s.requireTech(s.handleEndSession))
 	s.mux.HandleFunc("POST /api/sessions/{id}/notes", s.requireTech(s.handleAddSessionNote))
+	s.mux.HandleFunc("POST /api/sessions/{id}/files", s.requireTech(s.handleTechFileUpload))
+	s.mux.HandleFunc("GET /api/sessions/{id}/files/{transfer}", s.requireTech(s.handleTechFileDownload))
 	s.mux.HandleFunc("GET /api/admins", s.requireAdminRole(s.handleListAdmins))
 	s.mux.HandleFunc("POST /api/admins", s.requireAdminRole(s.handleCreateAdmin))
 	s.mux.HandleFunc("PATCH /api/admins/{id}", s.requireAdminRole(s.handleUpdateAdmin))
@@ -77,6 +83,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/agent/lookup", s.handleAgentLookup)
 	s.mux.HandleFunc("POST /api/agent/redeem", s.handleAgentRedeem)
 	s.mux.HandleFunc("POST /api/agent/end", s.handleAgentEnd)
+	s.mux.HandleFunc("POST /api/agent/files", s.handleAgentFileUpload)
+	s.mux.HandleFunc("GET /api/agent/files/{transfer}", s.handleAgentFileDownload)
 	s.mux.HandleFunc("GET /api/download-status", s.handleDownloadStatus)
 	s.mux.HandleFunc("GET /download/windows", s.handleAgentDownload)
 	s.mux.HandleFunc("GET /ws/agent", s.handleAgentWS)
@@ -270,8 +278,10 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		CustomerLabel      string `json:"customer_label"`
-		RequestedControl   bool   `json:"requested_control"`
-		RequestedElevation bool   `json:"requested_elevation"`
+		RequestedControl      bool   `json:"requested_control"`
+		RequestedElevation    bool   `json:"requested_elevation"`
+		RequestedClipboard    bool   `json:"requested_clipboard"`
+		RequestedFileTransfer bool   `json:"requested_file_transfer"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -297,7 +307,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		session := Session{
 			ID: id, CodeHint: code[len(code)-4:], CustomerLabel: strings.TrimSpace(req.CustomerLabel),
 			TechnicianName: techName(r.Context()), TechnicianID: &admin.ID, RequestedControl: req.RequestedControl,
-			RequestedElevation: req.RequestedElevation, CreatedAt: now, ExpiresAt: now.Add(s.cfg.SessionTTL),
+			RequestedElevation: req.RequestedElevation, RequestedClipboard: req.RequestedClipboard,
+			RequestedFileTransfer: req.RequestedFileTransfer, CreatedAt: now, ExpiresAt: now.Add(s.cfg.SessionTTL),
 		}
 		err = s.store.CreateSession(r.Context(), session, hmacHex(s.cfg.CodeSecret, code))
 		if err == nil {
@@ -305,7 +316,13 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 			s.store.SetSessionTechnicianID(r.Context(), id, admin.ID)
 			s.store.AddEvent(r.Context(), id, admin.Username, "session_created", "")
 			s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_created", "session", id,
-				auditJSON(map[string]any{"customer_label": session.CustomerLabel, "control": session.RequestedControl, "elevation": session.RequestedElevation}), s.clientIP(r))
+				auditJSON(map[string]any{
+					"customer_label": session.CustomerLabel,
+					"control": session.RequestedControl,
+					"elevation": session.RequestedElevation,
+					"clipboard": session.RequestedClipboard,
+					"file_transfer": session.RequestedFileTransfer,
+				}), s.clientIP(r))
 			writeJSON(w, http.StatusCreated, map[string]any{"session": session, "code": code})
 			return
 		}
@@ -366,6 +383,7 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
 	s.store.AddEvent(r.Context(), id, admin.Username, "session_ended", "")
 	s.store.AddAdminAudit(r.Context(), &admin.ID, admin.Username, "session_ended", "session", id, "", s.clientIP(r))
 	s.hub.End(id)
+	s.transfers.RemoveSession(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -404,7 +422,8 @@ func (s *Server) handleAgentLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": session.ID, "technician_name": session.TechnicianName,
 		"customer_label": session.CustomerLabel, "requested_control": session.RequestedControl,
-		"requested_elevation": session.RequestedElevation, "expires_at": session.ExpiresAt,
+		"requested_elevation": session.RequestedElevation, "requested_clipboard": session.RequestedClipboard,
+		"requested_file_transfer": session.RequestedFileTransfer, "expires_at": session.ExpiresAt,
 	})
 }
 
@@ -487,6 +506,7 @@ func (s *Server) handleAgentEnd(w http.ResponseWriter, r *http.Request) {
 	}
 	s.store.AddEvent(r.Context(), req.SessionID, "customer", "session_ended", "customer ended support session")
 	s.hub.End(req.SessionID)
+	s.transfers.RemoveSession(req.SessionID)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -565,7 +585,33 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if mt == websocket.BinaryMessage || mt == websocket.TextMessage {
+		if mt == websocket.BinaryMessage {
+			if err := s.hub.sendToTech(id, mt, data); err != nil {
+				log.Printf("forward agent->tech session=%s: %v", id, err)
+			}
+			continue
+		}
+		if mt == websocket.TextMessage {
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			if json.Unmarshal(data, &envelope) != nil {
+				continue
+			}
+			if envelope.Type == "clipboard_data" {
+				if !session.RequestedClipboard {
+					continue
+				}
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if json.Unmarshal(data, &payload) != nil || len(payload.Text) > maxClipboardBytes {
+					continue
+				}
+			}
+			if envelope.Type == "clipboard_status" && !session.RequestedClipboard {
+				continue
+			}
 			if err := s.hub.sendToTech(id, mt, data); err != nil {
 				log.Printf("forward agent->tech session=%s: %v", id, err)
 			}
@@ -599,7 +645,7 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 	}()
 	_ = peer.write(websocket.TextMessage, []byte(`{"type":"tech_status","status":"connected"}`))
-	conn.SetReadLimit(64 * 1024)
+	conn.SetReadLimit(1024 * 1024)
 	for {
 		mt, data, err := conn.ReadMessage()
 		if err != nil {
@@ -623,6 +669,24 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 		if envelope.Type == "capture_settings" {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward capture settings session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "clipboard_get" && session.RequestedClipboard {
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward clipboard request session=%s: %v", id, err)
+			}
+			continue
+		}
+		if envelope.Type == "clipboard_set" && session.RequestedClipboard {
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(data, &payload) != nil || len(payload.Text) > maxClipboardBytes {
+				continue
+			}
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+				log.Printf("forward clipboard session=%s: %v", id, err)
 			}
 		}
 	}

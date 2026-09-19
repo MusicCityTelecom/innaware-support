@@ -97,6 +97,12 @@ func (s *Store) migrateOperations(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "support_sessions", "technician_id", "BIGINT UNSIGNED NULL AFTER technician_name"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "support_sessions", "requested_clipboard", "BOOLEAN NOT NULL DEFAULT FALSE AFTER requested_elevation"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "support_sessions", "requested_file_transfer", "BOOLEAN NOT NULL DEFAULT FALSE AFTER requested_clipboard"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -110,7 +116,11 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, ddl string) err
 	if n > 0 {
 		return nil
 	}
-	allowed := map[string]bool{"support_sessions.technician_id": true}
+	allowed := map[string]bool{
+		"support_sessions.technician_id": true,
+		"support_sessions.requested_clipboard": true,
+		"support_sessions.requested_file_transfer": true,
+	}
 	if !allowed[table+"."+column] {
 		return fmt.Errorf("migration attempted unexpected column %s.%s", table, column)
 	}
