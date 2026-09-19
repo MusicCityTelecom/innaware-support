@@ -39,7 +39,7 @@ function setAuthUI(loggedIn) {
   show('logoutButton', loggedIn);
   show('accountButton', loggedIn);
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !loggedIn || !isAdmin()));
-  $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} Â· ${state.me.role}` : '';
+  $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} · ${state.me.role}` : '';
   if (!loggedIn) {
     switchTab('sessions', false);
   }
@@ -133,7 +133,7 @@ async function loadMetrics() {
     $('connectedMetric').textContent = m.connected ?? 0;
     $('todayMetric').textContent = m.created_today ?? 0;
     $('weekMetric').textContent = m.ended_seven_days ?? 0;
-    $('avgMetric').textContent = m.average_minutes > 0 ? `${Math.round(m.average_minutes)}m` : 'â';
+    $('avgMetric').textContent = m.average_minutes > 0 ? `${Math.round(m.average_minutes)}m` : '—';
   } catch (e) { console.error(e); }
 }
 
@@ -730,9 +730,9 @@ function renderAudit(){
   }
 }
 
-function formatDate(v){if(!v)return 'â';const d=new Date(v);return Number.isNaN(d.getTime())?'â':d.toLocaleString();}
+function formatDate(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleString();}
 function sessionDuration(s){
-  if(!s.connected_at)return 'â';
+  if(!s.connected_at)return '—';
   const end=s.ended_at?new Date(s.ended_at):new Date();
   const start=new Date(s.connected_at);
   const sec=Math.max(0,Math.round((end-start)/1000));
