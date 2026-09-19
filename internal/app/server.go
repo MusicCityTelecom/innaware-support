@@ -364,7 +364,13 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	events, _ := s.store.ListEvents(r.Context(), id)
 	notes, _ := s.store.ListSessionNotes(r.Context(), id)
-	writeJSON(w, http.StatusOK, map[string]any{"session": session, "events": events, "notes": notes})
+	network, _ := s.store.GetSessionNetwork(r.Context(), id)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session": session,
+		"events": events,
+		"notes": notes,
+		"network": network,
+	})
 }
 
 func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request) {
@@ -600,6 +606,20 @@ func (s *Server) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 			}
 			if json.Unmarshal(data, &envelope) != nil {
 				continue
+			}
+			if envelope.Type == "hello" {
+				var hello struct {
+					Network *SessionNetworkSnapshot `json:"network"`
+				}
+				if json.Unmarshal(data, &hello) == nil && hello.Network != nil {
+					if err := s.store.UpsertSessionNetwork(
+						r.Context(),
+						id,
+						*hello.Network,
+					); err != nil {
+						log.Printf("persist network snapshot session=%s: %v", id, err)
+					}
+				}
 			}
 			if envelope.Type == "clipboard_data" {
 				if !session.RequestedClipboard {
