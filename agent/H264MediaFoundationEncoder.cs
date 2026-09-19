@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using SharpGen.Runtime;
 using Vortice.MediaFoundation;
@@ -18,11 +19,15 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
     private readonly IMFActivate _activation;
     private readonly IMFTransform _transform;
     private readonly bool _providesSamples;
+    private readonly bool _async;
+    private readonly IMFMediaEventGenerator? _events;
     private readonly int _outputBufferSize;
     private readonly int _width;
     private readonly int _height;
     private readonly int _fps;
+    private readonly Queue<(byte[] Data, bool KeyFrame, long TimestampMicroseconds)> _asyncReady = new();
     private byte[]? _sequenceHeader;
+    private int _inputCredit;
     private bool _disposed;
 
     public int Width => _width;
@@ -37,6 +42,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         IMFTransform transform,
         string name,
         bool hardware,
+        bool asyncTransform,
         int width,
         int height,
         int fps,
@@ -46,10 +52,28 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         _transform = transform;
         Name = name;
         Hardware = hardware;
+        _async = asyncTransform;
         _width = width;
         _height = height;
         _fps = fps;
         Bitrate = bitrate;
+
+        if (_async)
+        {
+            var attributes = transform.Attributes;
+            attributes.Set(
+                TransformAttributeKeys.TransformAsyncUnlock,
+                1u).CheckError();
+            try
+            {
+                attributes.Set(
+                    SinkWriterAttributeKeys.LowLatency,
+                    1u).CheckError();
+            }
+            catch { }
+
+            _events = transform.QueryInterface<IMFMediaEventGenerator>();
+        }
 
         ConfigureTransform(transform, width, height, fps, bitrate);
 
@@ -80,6 +104,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
             bitrate,
             (uint)(EnumFlag.EnumFlagHardware |
                    EnumFlag.EnumFlagSyncmft |
+                   EnumFlag.EnumFlagAsyncmft |
                    EnumFlag.EnumFlagSortandfilter),
             hardware: true);
 
@@ -92,6 +117,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
             fps,
             bitrate,
             (uint)(EnumFlag.EnumFlagSyncmft |
+                   EnumFlag.EnumFlagAsyncmft |
                    EnumFlag.EnumFlagLocalmft |
                    EnumFlag.EnumFlagSortandfilter),
             hardware: false);
@@ -129,17 +155,11 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                 transform = candidate.ActivateObject<IMFTransform>();
 
                 var attributes = transform.Attributes;
-                if (attributes.GetUInt32(
+                var asyncTransform =
+                    attributes.GetUInt32(
                         TransformAttributeKeys.TransformAsync,
                         out var isAsync).Success &&
-                    isAsync != 0)
-                {
-                    transform.Dispose();
-                    transform = null;
-                    retained.Dispose();
-                    retained = null;
-                    continue;
-                }
+                    isAsync != 0;
 
                 var name = ReadFriendlyName(candidate);
                 var built = new H264MediaFoundationEncoder(
@@ -147,6 +167,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                     transform,
                     name,
                     hardware,
+                    asyncTransform,
                     width,
                     height,
                     Math.Clamp(fps, 2, 30),
@@ -177,9 +198,15 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (frame.Width != _width || frame.Height != _height)
-            throw new ArgumentException("Captured frame dimensions do not match the H.264 encoder.");
+            throw new ArgumentException(
+                "Captured frame dimensions do not match the H.264 encoder.");
 
-        using var input = CreateInputSample(frame, timestampMicroseconds);
+        if (_async)
+            return EncodeAsync(frame, timestampMicroseconds);
+
+        using var input = CreateInputSample(
+            frame,
+            timestampMicroseconds);
 
         try
         {
@@ -194,12 +221,128 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         if (encoded is null)
             return null;
 
+        return FinalizeEncoded(
+            encoded.Value.Data,
+            encoded.Value.KeyFrame,
+            encoded.Value.TimestampMicroseconds);
+    }
+
+    private H264EncodedFrame EncodeAsync(
+        CapturedBgraFrame frame,
+        long timestampMicroseconds)
+    {
+        var budgetMs = Math.Clamp(
+            (1000 / Math.Max(1, _fps)) * 2,
+            40,
+            160);
+
+        if (!WaitForInputCredit(budgetMs))
+            throw new TimeoutException(
+                "Asynchronous H.264 encoder did not request input.");
+
+        using var input = CreateInputSample(
+            frame,
+            timestampMicroseconds);
+
+        _inputCredit--;
+        _transform.ProcessInput(0, input, 0);
+
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started).TotalMilliseconds < budgetMs)
+        {
+            PumpAsyncEvents();
+
+            if (_asyncReady.Count > 0)
+            {
+                var encoded = _asyncReady.Dequeue();
+                return FinalizeEncoded(
+                    encoded.Data,
+                    encoded.KeyFrame,
+                    encoded.TimestampMicroseconds);
+            }
+
+            Thread.Sleep(1);
+        }
+
+        throw new TimeoutException(
+            "Asynchronous H.264 encoder did not produce output in time.");
+    }
+
+    private bool WaitForInputCredit(int timeoutMs)
+    {
+        if (_inputCredit > 0)
+            return true;
+
+        var started = Stopwatch.GetTimestamp();
+        while (Stopwatch.GetElapsedTime(started).TotalMilliseconds < timeoutMs)
+        {
+            PumpAsyncEvents();
+            if (_inputCredit > 0)
+                return true;
+
+            Thread.Sleep(1);
+        }
+
+        return false;
+    }
+
+    private void PumpAsyncEvents()
+    {
+        if (_events is null)
+            return;
+
+        for (var i = 0; i < 16; i++)
+        {
+            IMFMediaEvent mediaEvent;
+            try
+            {
+                mediaEvent = _events.GetEvent(1);
+            }
+            catch (SharpGenException ex)
+                when (ex.ResultCode ==
+                      Vortice.MediaFoundation.ResultCode.NoEventsAvailable)
+            {
+                return;
+            }
+
+            using (mediaEvent)
+            {
+                mediaEvent.Status.CheckError();
+
+                switch (mediaEvent.EventType)
+                {
+                    case MediaEventTypes.TransformNeedInput:
+                        _inputCredit = Math.Min(8, _inputCredit + 1);
+                        break;
+
+                    case MediaEventTypes.TransformHaveOutput:
+                    {
+                        var encoded = TryReadOutput();
+                        if (encoded is not null)
+                        {
+                            _asyncReady.Enqueue((
+                                encoded.Value.Data,
+                                encoded.Value.KeyFrame,
+                                encoded.Value.TimestampMicroseconds));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private H264EncodedFrame FinalizeEncoded(
+        byte[] data,
+        bool reportedKeyFrame,
+        long timestampMicroseconds)
+    {
         if (_sequenceHeader is null)
             _sequenceHeader = ReadSequenceHeader();
 
-        var annexB = H264AnnexB.Normalize(encoded.Value.Data);
+        var annexB = H264AnnexB.Normalize(data);
         var keyFrame =
-            encoded.Value.KeyFrame ||
+            reportedKeyFrame ||
             H264AnnexB.ContainsNalType(annexB, 5);
 
         if (keyFrame &&
@@ -208,9 +351,22 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
              !H264AnnexB.ContainsNalType(annexB, 8)))
         {
             var normalizedHeader = H264AnnexB.Normalize(header);
-            var combined = new byte[normalizedHeader.Length + annexB.Length];
-            Buffer.BlockCopy(normalizedHeader, 0, combined, 0, normalizedHeader.Length);
-            Buffer.BlockCopy(annexB, 0, combined, normalizedHeader.Length, annexB.Length);
+            var combined = new byte[
+                normalizedHeader.Length + annexB.Length];
+
+            Buffer.BlockCopy(
+                normalizedHeader,
+                0,
+                combined,
+                0,
+                normalizedHeader.Length);
+            Buffer.BlockCopy(
+                annexB,
+                0,
+                combined,
+                normalizedHeader.Length,
+                annexB.Length);
+
             annexB = combined;
         }
 
@@ -220,7 +376,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
             timestampMicroseconds);
     }
 
-    private (byte[] Data, bool KeyFrame)? TryReadOutput()
+    private (byte[] Data, bool KeyFrame, long TimestampMicroseconds)? TryReadOutput()
     {
         IMFSample? clientSample = null;
         var output = new OutputDataBuffer
@@ -281,7 +437,13 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                     out var clean).Success &&
                 clean != 0;
 
-            return (bytes, cleanPoint);
+            var timestampMicroseconds =
+                sample.SampleTime / 10;
+
+            return (
+                bytes,
+                cleanPoint,
+                timestampMicroseconds);
         }
         finally
         {
@@ -506,6 +668,8 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         }
         catch { }
 
+        try { _events?.Dispose(); } catch { }
+        _asyncReady.Clear();
         _transform.Dispose();
 
         try { _activation.ShutdownObject(); } catch { }
