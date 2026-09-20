@@ -65,6 +65,26 @@ jobs:
         run: |
           Copy-Item dist/agent/InnAwareSupport.exe dist/InnAware-Remote-Support.exe
           Get-FileHash dist/InnAware-Remote-Support.exe -Algorithm SHA256 | Format-List
+      - name: Verify customer client identity
+        shell: pwsh
+        run: |
+          $path = Resolve-Path 'dist/InnAware-Remote-Support.exe'
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path)
+          Write-Host "ProductName:     $($info.ProductName)"
+          Write-Host "CompanyName:     $($info.CompanyName)"
+          Write-Host "Description:     $($info.FileDescription)"
+          Write-Host "FileVersion:     $($info.FileVersion)"
+          Write-Host "ProductVersion:  $($info.ProductVersion)"
+          if ($info.ProductName -ne 'InnAware Remote Support') { throw "Unexpected ProductName: $($info.ProductName)" }
+          if ($info.CompanyName -ne 'InnAware') { throw "Unexpected CompanyName: $($info.CompanyName)" }
+          if ($info.FileVersion -ne '0.8.0.0') { throw "Unexpected FileVersion: $($info.FileVersion)" }
+          $signature = Get-AuthenticodeSignature $path
+          Write-Host "Authenticode:    $($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "Signer subject:  $($signature.SignerCertificate.Subject)"
+          } else {
+            Write-Host "Signer subject:  (not signed yet)"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: InnAware-Remote-Support-Windows-x64
@@ -88,9 +108,23 @@ jobs:
           if (-not (Test-Path $exe)) { throw "Technician executable was not published." }
           $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
           Write-Host "ProductName: $($info.ProductName)"
+          Write-Host "CompanyName: $($info.CompanyName)"
           Write-Host "FileVersion: $($info.FileVersion)"
           if ($info.ProductName -ne 'InnAware Support Technician') {
             throw "Unexpected technician ProductName: $($info.ProductName)"
+          }
+          if ($info.CompanyName -ne 'InnAware') {
+            throw "Unexpected technician CompanyName: $($info.CompanyName)"
+          }
+          if ($info.FileVersion -ne '0.8.0.0') {
+            throw "Unexpected technician FileVersion: $($info.FileVersion)"
+          }
+          $signature = Get-AuthenticodeSignature $exe
+          Write-Host "Authenticode: $($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "Signer subject: $($signature.SignerCertificate.Subject)"
+          } else {
+            Write-Host "Signer subject: (not signed yet)"
           }
           Get-FileHash $exe -Algorithm SHA256 | Format-List
       - name: Build portable ZIP
