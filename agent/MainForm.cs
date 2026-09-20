@@ -653,6 +653,12 @@ internal sealed class MainForm : Form
                         AddChatMessage(message);
                     }
                 }
+                else if (type == "network_refresh_request")
+                {
+                    _networkSnapshot = null;
+                    _networkSnapshotAtUtc = DateTime.MinValue;
+                    await SendHelloAsync(ct);
+                }
                 else if (type == "elevation_request")
                 {
                     await HandleElevationRequestAsync(ct);
