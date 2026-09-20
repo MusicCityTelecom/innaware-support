@@ -142,6 +142,10 @@ internal sealed class TechnicianForm : Form
             await FocusWebElementAsync("chatBody"));
         AddButton("Files", async (_, _) =>
             await ScrollWebElementAsync("fileTransferCard"));
+        AddButton("Network", async (_, _) =>
+            await ScrollWebElementAsync("networkCard"));
+        AddButton("Refresh Net", async (_, _) =>
+            await ClickWebButtonAsync("refreshNetworkButton"));
         AddButton("Elevate", async (_, _) =>
             await ClickWebButtonAsync("requestElevationButton"));
 
