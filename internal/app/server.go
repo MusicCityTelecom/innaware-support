@@ -804,6 +804,14 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if envelope.Type == "viewer_capabilities" {
+			if len(data) <= 4*1024 {
+				if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
+					log.Printf("forward viewer capabilities session=%s: %v", id, err)
+				}
+			}
+			continue
+		}
 		if envelope.Type == "network_refresh_request" {
 			admin := currentAdmin(r.Context())
 			s.store.AddEvent(r.Context(), id, admin.Username, "network_refresh_requested", "")
