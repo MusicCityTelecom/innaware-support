@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -13,6 +14,9 @@ internal sealed record ElevationHandoff(
     bool RequestedClipboard,
     bool RequestedFileTransfer)
 {
+    private static readonly byte[] AdditionalEntropy =
+        Encoding.UTF8.GetBytes("InnAware.Support.ElevationHandoff.v1");
+
     public static string Write(ElevationHandoff handoff)
     {
         var root = Path.Combine(
@@ -24,25 +28,58 @@ internal sealed record ElevationHandoff(
 
         var path = Path.Combine(
             root,
-            $"elevation-{Guid.NewGuid():N}.json");
+            $"elevation-{Guid.NewGuid():N}.bin");
 
         var json = JsonSerializer.Serialize(handoff);
-        File.WriteAllText(path, json, Encoding.UTF8);
-        File.SetAttributes(path, FileAttributes.Hidden);
-        return path;
+        var plaintext = Encoding.UTF8.GetBytes(json);
+        var encrypted = ProtectedData.Protect(
+            plaintext,
+            AdditionalEntropy,
+            DataProtectionScope.CurrentUser);
+
+        try
+        {
+            File.WriteAllBytes(path, encrypted);
+            File.SetAttributes(path, FileAttributes.Hidden | FileAttributes.Temporary);
+            return path;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(plaintext);
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
     }
 
     public static ElevationHandoff ReadAndDelete(string path)
     {
+        byte[]? encrypted = null;
+        byte[]? plaintext = null;
+
         try
         {
-            var json = File.ReadAllText(path, Encoding.UTF8);
+            encrypted = File.ReadAllBytes(path);
+            plaintext = ProtectedData.Unprotect(
+                encrypted,
+                AdditionalEntropy,
+                DataProtectionScope.CurrentUser);
+
+            var json = Encoding.UTF8.GetString(plaintext);
             return JsonSerializer.Deserialize<ElevationHandoff>(json)
-                ?? throw new InvalidOperationException("Elevation handoff is empty.");
+                ?? throw new InvalidOperationException(
+                    "Elevation handoff is empty.");
         }
         finally
         {
-            try { File.Delete(path); } catch { }
+            if (encrypted is not null)
+                CryptographicOperations.ZeroMemory(encrypted);
+            if (plaintext is not null)
+                CryptographicOperations.ZeroMemory(plaintext);
+
+            try
+            {
+                File.Delete(path);
+            }
+            catch { }
         }
     }
 }
