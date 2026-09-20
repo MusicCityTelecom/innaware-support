@@ -39,5 +39,11 @@ Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 Name: "{group}\InnAware Support Technician"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\InnAware Support Technician"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+[Registry]
+Root: HKCR; Subkey: "innaware-support-tech"; ValueType: string; ValueName: ""; ValueData: "URL:InnAware Support Technician"; Flags: uninsdeletekey
+Root: HKCR; Subkey: "innaware-support-tech"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCR; Subkey: "innaware-support-tech\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"",0"
+Root: HKCR; Subkey: "innaware-support-tech\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch InnAware Support Technician"; Flags: nowait postinstall skipifsilent
