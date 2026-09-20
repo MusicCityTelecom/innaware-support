@@ -70,6 +70,56 @@ PY_AGENT
   fi
 fi
 
+download_optional_release_asset() {
+  local label="$1"
+  local url="$2"
+  local destination="$3"
+  local kind="$4"
+
+  if [[ -s "$destination" ]]; then
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp "$DOWNLOAD_DIR/.download.XXXXXX")"
+
+  if ! curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "WARNING: $label release asset is not available yet." >&2
+    return 0
+  fi
+
+  python3 - "$tmp" "$kind" "$label" <<'PY_EXTRA_ASSET'
+import pathlib
+import sys
+import zipfile
+
+path = pathlib.Path(sys.argv[1])
+kind = sys.argv[2]
+label = sys.argv[3]
+data = path.read_bytes()
+
+if kind == "pe":
+    if len(data) < 100_000 or not data.startswith(b"MZ"):
+        raise SystemExit(f"{label} is not a plausible PE executable")
+elif kind == "zip":
+    if len(data) < 10_000 or not data.startswith(b"PK") or not zipfile.is_zipfile(path):
+        raise SystemExit(f"{label} is not a plausible ZIP archive")
+else:
+    raise SystemExit(f"unknown validation kind: {kind}")
+PY_EXTRA_ASSET
+
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$destination"
+}
+
+TECH_PORTABLE_URL="${TECH_PORTABLE_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Support-Technician-Portable.zip}"
+TECH_INSTALLER_URL="${TECH_INSTALLER_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Support-Technician-Setup.exe}"
+
+download_optional_release_asset   "Technician portable"   "$TECH_PORTABLE_URL"   "$DOWNLOAD_DIR/InnAware-Support-Technician-Portable.zip"   zip
+
+download_optional_release_asset   "Technician installer"   "$TECH_INSTALLER_URL"   "$DOWNLOAD_DIR/InnAware-Support-Technician-Setup.exe"   pe
+
 if ! getent passwd innaware-support >/dev/null; then
   useradd --system --user-group --home-dir "$APP_ROOT" --no-create-home --shell /usr/sbin/nologin innaware-support
 fi
@@ -98,6 +148,8 @@ CODE_SECRET=$CODE_SECRET
 SESSION_TTL_MINUTES=15
 LIVE_SESSION_TTL_MINUTES=480
 AGENT_DOWNLOAD_PATH=$DOWNLOAD_DIR/InnAwareSupport.exe
+TECHNICIAN_PORTABLE_PATH=$DOWNLOAD_DIR/InnAware-Support-Technician-Portable.zip
+TECHNICIAN_INSTALLER_PATH=$DOWNLOAD_DIR/InnAware-Support-Technician-Setup.exe
 TRUST_PROXY=true
 ENV
   chmod 0600 "$ENV_FILE"
