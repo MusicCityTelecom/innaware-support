@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -41,6 +42,12 @@ internal sealed class MainForm : Form
     private long _adaptiveFpsLastAdjust;
     private string _captureMode = "auto";
     private H264CapabilityInfo? _h264Capability;
+    private int _viewerH264Supported;
+    private string _videoTransport = "jpeg";
+    private H264MediaFoundationEncoder? _h264Encoder;
+    private int _h264EncoderMonitor = -1;
+    private int _h264EncoderScale;
+    private int _h264EncoderFps;
     private NetworkSnapshot? _networkSnapshot;
     private DateTime _networkSnapshotAtUtc;
     private string _captureBackend = "initializing";
@@ -387,6 +394,7 @@ internal sealed class MainForm : Form
             h264_hardware_available = _h264Capability.HardwareAvailable,
             h264_hardware_encoders = _h264Capability.HardwareEncoders,
             h264_probe_error = _h264Capability.Error,
+            video_transport = Volatile.Read(ref _videoTransport),
             network,
             live_expires_at = _liveExpiresAtUtc
         });
