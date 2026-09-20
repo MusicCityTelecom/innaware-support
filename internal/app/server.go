@@ -89,6 +89,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/agent/files/{transfer}", s.handleAgentFileDownload)
 	s.mux.HandleFunc("GET /api/download-status", s.handleDownloadStatus)
 	s.mux.HandleFunc("GET /download/windows", s.handleAgentDownload)
+	s.mux.HandleFunc("GET /api/technician-downloads", s.requireTech(s.handleTechnicianDownloadStatus))
+	s.mux.HandleFunc("GET /download/technician/portable", s.requireTech(s.handleTechnicianPortableDownload))
+	s.mux.HandleFunc("GET /download/technician/installer", s.requireTech(s.handleTechnicianInstallerDownload))
 	s.mux.HandleFunc("GET /ws/agent", s.handleAgentWS)
 	s.mux.HandleFunc("GET /ws/tech", s.requireTech(s.handleTechWS))
 
@@ -534,6 +537,59 @@ func (s *Server) handleAgentDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="InnAware-Remote-Support.exe"`)
 	w.Header().Set("Cache-Control", "no-store")
 	http.ServeFile(w, r, s.cfg.AgentDownloadPath)
+}
+
+func downloadableFileStatus(path string) map[string]any {
+	st, err := os.Stat(path)
+	if err != nil || !st.Mode().IsRegular() {
+		return map[string]any{"available": false}
+	}
+	return map[string]any{
+		"available": true,
+		"size":      st.Size(),
+		"modified_at": st.ModTime().UTC(),
+	}
+}
+
+func (s *Server) handleTechnicianDownloadStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"portable":  downloadableFileStatus(s.cfg.TechnicianPortablePath),
+		"installer": downloadableFileStatus(s.cfg.TechnicianInstallerPath),
+	})
+}
+
+func serveTechnicianArtifact(
+	w http.ResponseWriter,
+	r *http.Request,
+	path, filename, contentType string,
+) {
+	st, err := os.Stat(path)
+	if err != nil || !st.Mode().IsRegular() || st.Size() <= 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "technician application build is not published on this server yet"})
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeFile(w, r, path)
+}
+
+func (s *Server) handleTechnicianPortableDownload(w http.ResponseWriter, r *http.Request) {
+	serveTechnicianArtifact(
+		w, r,
+		s.cfg.TechnicianPortablePath,
+		"InnAware-Support-Technician-Portable.zip",
+		"application/zip",
+	)
+}
+
+func (s *Server) handleTechnicianInstallerDownload(w http.ResponseWriter, r *http.Request) {
+	serveTechnicianArtifact(
+		w, r,
+		s.cfg.TechnicianInstallerPath,
+		"InnAware-Support-Technician-Setup.exe",
+		"application/vnd.microsoft.portable-executable",
+	)
 }
 
 func bearerToken(r *http.Request) string {
