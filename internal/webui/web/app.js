@@ -348,6 +348,8 @@ async function openViewer(id) {
     $('backButton').textContent = popout ? 'Close viewer' : '← Back';
     show('recordViewerButton', active);
     show('requestElevationButton', active);
+    show('openTechnicianAppButton', active);
+    $('refreshNetworkButton').disabled=!active;
     if (active) {
       connectViewerWS(id);
       if (state.session.requested_file_transfer) void loadPendingCustomerFiles();
@@ -598,6 +600,7 @@ function applyAgentHello(msg){
   if(msg.network){
     state.network=msg.network;
     renderNetworkDetails();
+    $('refreshNetworkButton').disabled=false;
   }
   renderSessionDetail();
   $('viewerCaptureState').textContent=`${msg.elevated?'Elevated':'Standard user'} · ${msg.control?'Control enabled':'View only'}${msg.clipboard?' · Clipboard enabled':''}${msg.file_transfer?' · Files enabled':''}`;
@@ -927,6 +930,28 @@ $('chatImageInput').addEventListener('change',async()=>{
   }finally{
     input.value='';
     $('chatImageButton').disabled=!state.session?.requested_file_transfer;
+  }
+});
+
+$('openTechnicianAppButton').addEventListener('click',()=>{
+  if(!state.session)return;
+  const sessionId=String(state.session.id||'');
+  if(!sessionId)return;
+  window.location.href=`innaware-support-tech://session/${encodeURIComponent(sessionId)}`;
+});
+
+$('refreshNetworkButton').addEventListener('click',()=>{
+  if(!state.session)return;
+  try{
+    $('refreshNetworkButton').disabled=true;
+    $('networkUpdated').textContent='Refreshing network diagnostics…';
+    sendViewerMessage({type:'network_refresh_request'});
+    setTimeout(()=>{
+      if($('refreshNetworkButton'))$('refreshNetworkButton').disabled=false;
+    },5000);
+  }catch(e){
+    $('refreshNetworkButton').disabled=false;
+    $('networkUpdated').textContent='Refresh failed: '+e.message;
   }
 });
 
