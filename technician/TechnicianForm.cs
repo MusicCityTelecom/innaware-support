@@ -12,6 +12,10 @@ internal sealed class TechnicianForm : Form
     private readonly ToolStrip _tools = new();
     private readonly StatusStrip _status = new();
     private readonly ToolStripStatusLabel _statusText = new();
+    private readonly ToolStripComboBox _capture = new();
+    private readonly ToolStripComboBox _resolution = new();
+    private readonly ToolStripComboBox _quality = new();
+    private readonly ToolStripComboBox _fps = new();
 
     private FormBorderStyle _savedBorderStyle;
     private FormWindowState _savedWindowState;
@@ -72,6 +76,60 @@ internal sealed class TechnicianForm : Form
 
         _tools.Items.Add(new ToolStripSeparator());
 
+        ConfigureSelector(
+            "Capture",
+            _capture,
+            "captureModeSelect",
+            [
+                new("Auto", "auto"),
+                new("GDI", "gdi")
+            ],
+            "auto",
+            82);
+
+        ConfigureSelector(
+            "Resolution",
+            _resolution,
+            "scaleSelect",
+            [
+                new("100%", "100"),
+                new("75%", "75"),
+                new("50%", "50")
+            ],
+            "100",
+            66);
+
+        ConfigureSelector(
+            "Quality",
+            _quality,
+            "qualitySelect",
+            [
+                new("Low", "35"),
+                new("Balanced", "55"),
+                new("High", "70"),
+                new("Very high", "85")
+            ],
+            "55",
+            86);
+
+        ConfigureSelector(
+            "FPS",
+            _fps,
+            "fpsSelect",
+            [
+                new("Adaptive", "0"),
+                new("2", "2"),
+                new("4", "4"),
+                new("6", "6"),
+                new("8", "8"),
+                new("10", "10"),
+                new("12", "12")
+            ],
+            "6",
+            78);
+
+        _tools.Items.Add(new ToolStripSeparator());
+
         AddButton("Detach", async (_, _) =>
             await ClickWebButtonAsync("popoutViewerButton"));
         AddButton("Fit", async (_, _) =>
@@ -84,6 +142,10 @@ internal sealed class TechnicianForm : Form
             await FocusWebElementAsync("chatBody"));
         AddButton("Files", async (_, _) =>
             await ScrollWebElementAsync("fileTransferCard"));
+        AddButton("Network", async (_, _) =>
+            await ScrollWebElementAsync("networkCard"));
+        AddButton("Refresh Net", async (_, _) =>
+            await ClickWebButtonAsync("refreshNetworkButton"));
         AddButton("Elevate", async (_, _) =>
             await ClickWebButtonAsync("requestElevationButton"));
 
@@ -97,6 +159,86 @@ internal sealed class TechnicianForm : Form
         };
         topMost.CheckedChanged += (_, _) => TopMost = topMost.Checked;
         _tools.Items.Add(topMost);
+    }
+
+    private sealed record SelectorChoice(string Label, string Value)
+    {
+        public override string ToString() => Label;
+    }
+
+    private void ConfigureSelector(
+        string label,
+        ToolStripComboBox combo,
+        string webElementId,
+        SelectorChoice[] choices,
+        string defaultValue,
+        int width)
+    {
+        _tools.Items.Add(new ToolStripLabel(label));
+
+        combo.DropDownStyle = ComboBoxStyle.DropDownList;
+        combo.AutoSize = false;
+        combo.Width = width;
+
+        foreach (var choice in choices)
+            combo.Items.Add(choice);
+
+        combo.SelectedItem = choices.First(x => x.Value == defaultValue);
+        combo.ComboBox.SelectionChangeCommitted += async (_, _) =>
+        {
+            if (combo.SelectedItem is SelectorChoice selected)
+                await SetWebSelectValueAsync(webElementId, selected.Value);
+        };
+
+        _tools.Items.Add(combo);
+    }
+
+    private async Task SetWebSelectValueAsync(string id, string value)
+    {
+        await ExecuteScriptAsync(
+            $"(()=>{{const e=document.getElementById({JsonString(id)});if(!e)return false;e.value={JsonString(value)};e.dispatchEvent(new Event('change',{{bubbles:true}}));return true;}})();");
+    }
+
+    private async Task SyncViewerToolbarAsync()
+    {
+        await SyncSelectorAsync(_capture, "captureModeSelect");
+        await SyncSelectorAsync(_resolution, "scaleSelect");
+        await SyncSelectorAsync(_quality, "qualitySelect");
+        await SyncSelectorAsync(_fps, "fpsSelect");
+    }
+
+    private async Task SyncSelectorAsync(
+        ToolStripComboBox combo,
+        string webElementId)
+    {
+        if (_web.CoreWebView2 is null)
+            return;
+
+        try
+        {
+            var raw = await _web.CoreWebView2.ExecuteScriptAsync(
+                $"document.getElementById({JsonString(webElementId)})?.value ?? '';");
+            var value = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+            if (string.IsNullOrWhiteSpace(value))
+                return;
+
+            foreach (var item in combo.Items)
+            {
+                if (item is SelectorChoice choice &&
+                    string.Equals(
+                        choice.Value,
+                        value,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    combo.SelectedItem = choice;
+                    break;
+                }
+            }
+        }
+        catch
+        {
+            // The normal console/login pages do not expose viewer selectors.
+        }
     }
 
     private void AddButton(string text, EventHandler onClick)
@@ -124,15 +266,23 @@ internal sealed class TechnicianForm : Form
             core.Settings.AreBrowserAcceleratorKeysEnabled = true;
 
             core.NavigationStarting += NavigationStarting;
-            core.NavigationCompleted += (_, e) =>
+            core.NavigationCompleted += async (_, e) =>
             {
                 _statusText.Text = e.IsSuccess
                     ? "Connected to InnAware Support"
                     : $"Navigation error: {e.WebErrorStatus}";
+
+                if (e.IsSuccess)
+                {
+                    await Task.Delay(150);
+                    await SyncViewerToolbarAsync();
+                }
             };
-            core.SourceChanged += (_, _) =>
+            core.SourceChanged += async (_, _) =>
             {
                 _statusText.Text = core.Source;
+                await Task.Delay(100);
+                await SyncViewerToolbarAsync();
             };
             core.DocumentTitleChanged += (_, _) =>
             {
