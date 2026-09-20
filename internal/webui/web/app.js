@@ -694,8 +694,28 @@ function applyCaptureSettingsAck(msg){
   if(msg.adaptive_fps) $('fpsSelect').value='0';
   else if(msg.fps) $('fpsSelect').value=String(msg.fps);
   if(msg.capture_mode) $('captureModeSelect').value=msg.capture_mode==='gdi'?'gdi':'auto';
-  const fpsLabel=msg.adaptive_fps?`Adaptive (${Number(msg.fps)||0} FPS now)`:`${$('fpsSelect').value} FPS`;
-  $('viewerCaptureState').textContent=`Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · ${$('scaleSelect').value}% · JPEG ${$('qualitySelect').value} · ${fpsLabel}`;
+
+  const transport=
+    msg.video_transport==='h264-annexb' &&
+    !$('h264TransportOption').disabled
+      ? 'h264-annexb'
+      : 'jpeg';
+
+  if(transport!==state.videoTransport){
+    state.videoTransport=transport;
+    if(transport==='jpeg')resetH264Decoder();
+  }
+  $('videoTransportSelect').value=transport;
+
+  const fpsLabel=msg.adaptive_fps
+    ? `Adaptive (${Number(msg.fps)||0} FPS now)`
+    : `${$('fpsSelect').value} FPS`;
+  const videoLabel=transport==='h264-annexb'
+    ? `H.264${msg.h264_encoder?' · '+String(msg.h264_encoder):''}`
+    : `JPEG ${$('qualitySelect').value}`;
+
+  $('viewerCaptureState').textContent=
+    `Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · ${$('scaleSelect').value}% · ${videoLabel} · ${fpsLabel}`;
 }
 
 function applyCaptureTelemetry(msg){
@@ -703,9 +723,11 @@ function applyCaptureTelemetry(msg){
   const sent=Number(msg.frames_sent)||0;
   const skipped=Number(msg.frames_skipped)||0;
   const avg=Number(msg.average_capture_ms)||0;
-  const bytes=Number(msg.jpeg_bytes)||0;
+  const bytes=Number(msg.encoded_bytes??msg.jpeg_bytes)||0;
+  const transport=msg.transport==='h264-annexb'?'H.264':'JPEG';
   const payload=bytes>0?` · ${formatBytes(bytes)}/s encoded`:'';
-  $('viewerCaptureState').textContent=`${backend} · sent ${sent}/s · skipped ${skipped}/s · ${avg.toFixed(1)} ms avg${payload}`;
+  $('viewerCaptureState').textContent=
+    `${backend} · ${transport} · sent ${sent}/s · skipped ${skipped}/s · ${avg.toFixed(1)} ms avg${payload}`;
 }
 
 function sendCaptureSettings(){
@@ -715,6 +737,16 @@ function sendCaptureSettings(){
   const jpeg_quality=Number.parseInt($('qualitySelect').value,10);
   const fps=Number.parseInt($('fpsSelect').value,10);
   const capture_mode=$('captureModeSelect').value==='gdi'?'gdi':'auto';
+
+  let video_transport=$('videoTransportSelect').value;
+  if(video_transport==='h264-annexb' && $('h264TransportOption').disabled){
+    video_transport='jpeg';
+    $('videoTransportSelect').value='jpeg';
+  }
+
+  state.videoTransport=video_transport;
+  if(video_transport==='jpeg')resetH264Decoder();
+
   $('viewerCaptureState').textContent='Applying capture settings…';
   state.ws.send(JSON.stringify({
     type:'capture_settings',
@@ -723,7 +755,8 @@ function sendCaptureSettings(){
     jpeg_quality,
     fps,
     adaptive_fps:fps===0,
-    capture_mode
+    capture_mode,
+    video_transport
   }));
 }
 
@@ -733,14 +766,146 @@ function resetCaptureTelemetry(){
   state.frameWindowStart=now;state.frameCount=0;state.frameBytes=0;
   state.renderWindowStart=now;state.renderCount=0;state.renderDropped=0;state.renderDecodeMs=0;
   state.frameDecodeBusy=false;state.pendingFrame=null;
+  state.h264BrowserSupported=false;
+  state.h264AgentEligible=false;
+  state.videoTransport='jpeg';
+  resetH264Decoder();
+
   $('viewerTelemetry').textContent='Waiting for frames';
   $('viewerCaptureState').textContent='Capture settings pending';
   if($('viewerCodecCapability')) $('viewerCodecCapability').textContent='Video codec probe pending';
   $('monitorSelect').innerHTML='<option value="0">Monitor 1</option>';
   $('captureModeSelect').value='auto';
+  $('videoTransportSelect').value='jpeg';
+  $('h264TransportOption').disabled=true;
   $('scaleSelect').value='100';
   $('qualitySelect').value='55';
   $('fpsSelect').value='6';
+}
+
+function isH264Packet(buffer){
+  if(!buffer||buffer.byteLength<16)return false;
+  const v=new Uint8Array(buffer,0,4);
+  return v[0]===0x49&&v[1]===0x41&&v[2]===0x48&&v[3]===0x31;
+}
+
+function handleRemoteBinaryFrame(buffer){
+  if(isH264Packet(buffer)){
+    void decodeH264Packet(buffer);
+    return;
+  }
+  queueRemoteFrame(buffer);
+}
+
+function resetH264Decoder(){
+  if(state.h264Decoder){
+    try{state.h264Decoder.close();}catch{}
+  }
+  state.h264Decoder=null;
+  state.h264DecodeStarts.clear();
+}
+
+async function ensureH264Decoder(){
+  if(state.h264Decoder&&state.h264Decoder.state!=='closed')
+    return state.h264Decoder;
+
+  if(!await probeBrowserH264Support())
+    return null;
+
+  const decoder=new VideoDecoder({
+    output:(frame)=>{
+      const timestamp=Number(frame.timestamp);
+      const started=state.h264DecodeStarts.get(timestamp);
+      if(started!==undefined){
+        state.renderDecodeMs+=performance.now()-started;
+        state.h264DecodeStarts.delete(timestamp);
+      }
+
+      try{
+        const width=frame.displayWidth||frame.codedWidth;
+        const height=frame.displayHeight||frame.codedHeight;
+        const canvas=$('remoteCanvas');
+        if(canvas.width!==width)canvas.width=width;
+        if(canvas.height!==height)canvas.height=height;
+        canvas.getContext('2d').drawImage(frame,0,0,width,height);
+        canvas.style.display='block';
+        $('screenPlaceholder').style.display='none';
+        setViewerStatus('connected');
+        state.renderCount+=1;
+      }finally{
+        frame.close();
+      }
+
+      updateViewerFrameTelemetry();
+    },
+    error:(error)=>{
+      fallbackToJpeg('H.264 decoder error: '+(error?.message||'decode failed'));
+    }
+  });
+
+  try{
+    decoder.configure({
+      codec:'avc1.42E028',
+      hardwareAcceleration:'no-preference',
+      optimizeForLatency:true
+    });
+  }catch(e){
+    try{decoder.close();}catch{}
+    return null;
+  }
+
+  state.h264Decoder=decoder;
+  return decoder;
+}
+
+async function decodeH264Packet(buffer){
+  const bytes=buffer?.byteLength||0;
+  recordReceivedFrame(bytes);
+
+  if(state.videoTransport!=='h264-annexb'){
+    state.renderDropped+=1;
+    return;
+  }
+
+  const decoder=await ensureH264Decoder();
+  if(!decoder){
+    fallbackToJpeg('H.264 decoder unavailable');
+    return;
+  }
+
+  if(decoder.decodeQueueSize>8){
+    fallbackToJpeg('H.264 decoder fell behind');
+    return;
+  }
+
+  try{
+    const view=new DataView(buffer);
+    const key=(view.getUint8(4)&1)!==0;
+    const timestamp=Number(view.getBigInt64(8,false));
+    const payload=new Uint8Array(buffer,16);
+
+    state.h264DecodeStarts.set(timestamp,performance.now());
+
+    decoder.decode(new EncodedVideoChunk({
+      type:key?'key':'delta',
+      timestamp,
+      data:payload
+    }));
+  }catch(e){
+    fallbackToJpeg('H.264 decode rejected: '+e.message);
+  }
+}
+
+function fallbackToJpeg(reason){
+  resetH264Decoder();
+  state.videoTransport='jpeg';
+  $('videoTransportSelect').value='jpeg';
+  const codec=$('viewerCodecCapability');
+  if(codec){
+    codec.textContent=
+      `${codec.textContent.split(' · fallback:')[0]} · fallback: ${reason}`;
+  }
+  sendCaptureSettings();
 }
 
 function queueRemoteFrame(buffer){
@@ -837,6 +1002,10 @@ function updateViewerFrameTelemetry(){
 
 $('monitorSelect').addEventListener('change',sendCaptureSettings);
 $('captureModeSelect').addEventListener('change',sendCaptureSettings);
+$('videoTransportSelect').addEventListener('change',()=>{
+  if($('videoTransportSelect').value==='h264-annexb')resetH264Decoder();
+  sendCaptureSettings();
+});
 $('scaleSelect').addEventListener('change',sendCaptureSettings);
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
