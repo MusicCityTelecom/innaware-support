@@ -804,6 +804,14 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		if envelope.Type == "network_refresh_request" {
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(r.Context(), id, admin.Username, "network_refresh_requested", "")
+			if err := s.hub.sendToAgent(id, websocket.TextMessage, []byte(`{"type":"network_refresh_request"}`)); err != nil {
+				log.Printf("forward network refresh session=%s: %v", id, err)
+			}
+			continue
+		}
 		if envelope.Type == "clipboard_get" && session.RequestedClipboard {
 			if err := s.hub.sendToAgent(id, websocket.TextMessage, data); err != nil {
 				log.Printf("forward clipboard request session=%s: %v", id, err)
