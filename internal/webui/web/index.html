@@ -151,6 +151,7 @@
             <span id="viewerStatus" class="status-dot">Waiting</span>
           </div>
           <div class="viewer-head-actions">
+            <button id="openTechnicianAppButton" class="ghost" type="button">Open in Technician App</button>
             <button id="popoutViewerButton" class="ghost" type="button">Pop out</button>
             <button id="recordViewerButton" class="ghost" type="button">Record</button>
             <button id="requestElevationButton" class="ghost" type="button">Request elevation</button>
@@ -228,7 +229,10 @@
             <div id="networkCard" class="sidebar-card">
               <div class="network-head">
                 <h3>Customer network</h3>
-                <span id="networkUpdated" class="small muted">Waiting for diagnostics</span>
+                <div class="network-head-actions">
+                  <span id="networkUpdated" class="small muted">Waiting for diagnostics</span>
+                  <button id="refreshNetworkButton" class="ghost" type="button">Refresh</button>
+                </div>
               </div>
               <dl id="networkSummary" class="facts network-summary">
                 <dt>Public IP</dt><dd>—</dd>
