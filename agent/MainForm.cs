@@ -1820,7 +1820,9 @@ internal sealed class MainForm : Form
             scale_percent = Volatile.Read(ref _scalePercent),
             fps = Volatile.Read(ref _fps),
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
-            capture_mode = Volatile.Read(ref _captureMode)
+            capture_mode = Volatile.Read(ref _captureMode),
+            video_transport = Volatile.Read(ref _videoTransport),
+            h264_encoder = _h264Encoder?.Name
         });
         await SendTextAsync(message, ct);
     }
@@ -1995,6 +1997,8 @@ internal sealed class MainForm : Form
         _networkSnapshot = null;
         _networkSnapshotAtUtc = default;
         _lastSentFrame = null;
+        SetVideoTransport("jpeg");
+        Volatile.Write(ref _viewerH264Supported, 0);
         ScreenCapture.ResetAcceleratedCapture();
         Volatile.Write(ref _scalePercent, 100);
         Volatile.Write(ref _adaptiveFpsEnabled, 0);
@@ -2060,8 +2064,9 @@ internal sealed class MainForm : Form
             : $" · Session expires {_liveExpiresAtUtc.ToLocalTime():g}";
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         var backend = Volatile.Read(ref _captureBackend);
+        var transport = Volatile.Read(ref _videoTransport) == "h264-annexb" ? "H.264" : "JPEG";
         _detail.Text =
-            $"Server: {_options.Server} · {backend} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · JPEG {Volatile.Read(ref _jpegQuality)} · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · {transport} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)
