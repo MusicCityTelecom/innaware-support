@@ -412,6 +412,7 @@ function renderSessionDetail() {
     ['Status', `<span class="status ${escapeHTML(s.status)}">${escapeHTML(s.status)}</span>`],
     ['Technician', escapeHTML(s.technician_name || 'Unknown')],
     ['Computer', escapeHTML(s.machine_name || 'Not connected')],
+    ...(s.agent_build ? [['Customer app', escapeHTML(s.agent_build)]] : []),
     ['Created', escapeHTML(formatDate(s.created_at))],
     ['Connected', escapeHTML(formatDate(s.connected_at))],
     ['Ended', escapeHTML(formatDate(s.ended_at))],
@@ -579,6 +580,10 @@ function connectViewerWS(id){
 }
 
 function applyAgentHello(msg){
+  if(state.session){
+    state.session.agent_version=String(msg.agent_version||'');
+    state.session.agent_build=String(msg.agent_build||msg.agent_version||'');
+  }
   state.monitors=Array.isArray(msg.monitors)?msg.monitors:[];
   const select=$('monitorSelect');
   select.textContent='';
