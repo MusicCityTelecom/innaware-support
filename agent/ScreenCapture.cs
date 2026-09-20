@@ -111,6 +111,61 @@ internal static class ScreenCapture
         }
     }
 
+    public static bool TryCaptureBgra(
+        int screenIndex,
+        int timeoutMs,
+        int scalePercent,
+        bool forceGdi,
+        out CapturedBgraFrame? frame,
+        out string backend)
+    {
+        screenIndex = NormalizeScreenIndex(screenIndex);
+
+        lock (CaptureLock)
+        {
+            if (!forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
+            {
+                try
+                {
+                    EnsureDxgi(screenIndex);
+                    if (_dxgi is not null)
+                    {
+                        var status = _dxgi.TryCaptureBgra(timeoutMs, scalePercent, out frame);
+                        backend = "DXGI";
+
+                        if (status == DxgiCaptureStatus.Frame)
+                            return true;
+
+                        if (status == DxgiCaptureStatus.NoFrame)
+                            return false;
+
+                        ResetDxgi(TimeSpan.FromMilliseconds(250));
+                        frame = null;
+                        backend = "DXGI reset";
+                        return false;
+                    }
+                }
+                catch
+                {
+                    ResetDxgi(TimeSpan.FromSeconds(30));
+                }
+            }
+
+            try
+            {
+                frame = CaptureBgraGdi(screenIndex, scalePercent);
+                backend = forceGdi ? "GDI compatibility" : "GDI fallback";
+                return true;
+            }
+            catch
+            {
+                frame = null;
+                backend = "capture unavailable";
+                return false;
+            }
+        }
+    }
+
     public static void ResetAcceleratedCapture()
     {
         lock (CaptureLock)
@@ -136,6 +191,19 @@ internal static class ScreenCapture
         _dxgi = null;
         _dxgiScreenIndex = -1;
         _dxgiRetryAfterUtc = DateTime.UtcNow.Add(retryDelay);
+    }
+
+    private static CapturedBgraFrame CaptureBgraGdi(int screenIndex, int scalePercent)
+    {
+        var bounds = GetBounds(screenIndex);
+        using var bitmap = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
+        using (var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size, CopyPixelOperation.SourceCopy);
+            DrawCursor(graphics, bounds);
+        }
+
+        return CapturedBgraFrame.FromBitmap(bitmap, scalePercent);
     }
 
     private static byte[] CaptureJpegGdi(int screenIndex, long quality, int scalePercent)
