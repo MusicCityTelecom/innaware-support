@@ -184,7 +184,7 @@ internal sealed class TechnicianForm : Form
             combo.Items.Add(choice);
 
         combo.SelectedItem = choices.First(x => x.Value == defaultValue);
-        combo.SelectionChangeCommitted += async (_, _) =>
+        combo.ComboBox.SelectionChangeCommitted += async (_, _) =>
         {
             if (combo.SelectedItem is SelectorChoice selected)
                 await SetWebSelectValueAsync(webElementId, selected.Value);
