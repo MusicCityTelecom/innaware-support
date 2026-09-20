@@ -53,7 +53,7 @@ async function bootstrap() {
   try {
     state.me = await api('/api/me');
     setAuthUI(true);
-    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter(), loadTechnicianDownloads()]);
     await maybeOpenRequestedViewer();
   } catch {
     state.me = null;
@@ -73,6 +73,30 @@ async function bootstrap() {
   }
 }
 
+async function loadTechnicianDownloads() {
+  show('techPortableDownload', false);
+  show('techInstallerDownload', false);
+
+  if (!state.me) return;
+
+  try {
+    const status = await api('/api/technician-downloads');
+    show('techPortableDownload', !!status.portable?.available);
+    show('techInstallerDownload', !!status.installer?.available);
+
+    if (status.portable?.size) {
+      $('techPortableDownload').title =
+        `Portable ZIP · ${formatBytes(status.portable.size)}`;
+    }
+    if (status.installer?.size) {
+      $('techInstallerDownload').title =
+        `Windows installer · ${formatBytes(status.installer.size)}`;
+    }
+  } catch {
+    // Technician downloads are optional and must not block console login.
+  }
+}
+
 $('loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   $('loginError').textContent = '';
@@ -83,7 +107,7 @@ $('loginForm').addEventListener('submit', async (event) => {
     });
     $('password').value = '';
     setAuthUI(true);
-    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter()]);
+    await Promise.all([loadMetrics(), loadSessions(), loadTechnicianFilter(), loadTechnicianDownloads()]);
     await maybeOpenRequestedViewer();
   } catch (e) {
     $('loginError').textContent = e.message;
