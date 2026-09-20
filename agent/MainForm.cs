@@ -367,6 +367,8 @@ internal sealed class MainForm : Form
             {
                 index = m.Index,
                 name = m.DeviceName,
+                left = m.Left,
+                top = m.Top,
                 width = m.Width,
                 height = m.Height,
                 primary = m.Primary
