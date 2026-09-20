@@ -436,39 +436,127 @@ internal sealed class MainForm : Form
                 var fps = Math.Clamp(Volatile.Read(ref _fps), 1, 12);
                 var framePeriodMs = Math.Max(1, 1000 / fps);
                 var captureMode = Volatile.Read(ref _captureMode);
+                var transport = Volatile.Read(ref _videoTransport);
 
-                var started = Stopwatch.GetTimestamp();
-                var hasFrame = ScreenCapture.TryCaptureJpeg(
+                if (transport == "h264-annexb" &&
+                    Volatile.Read(ref _viewerH264Supported) == 1)
+                {
+                    var started = Stopwatch.GetTimestamp();
+                    var hasFrame = ScreenCapture.TryCaptureBgra(
+                        monitorIndex,
+                        framePeriodMs,
+                        scalePercent,
+                        captureMode == "gdi",
+                        out var bgraFrame,
+                        out var backend);
+
+                    if (!hasFrame || bgraFrame is null)
+                    {
+                        Volatile.Write(ref _captureBackend, backend + " + H.264");
+                        Interlocked.Increment(ref _captureWindowSkipped);
+                        await MaybeSendCaptureTelemetryAsync(ct);
+                        if (backend == "capture unavailable")
+                            await Task.Delay(Math.Min(500, framePeriodMs), ct);
+                        continue;
+                    }
+
+                    try
+                    {
+                        var encoder = EnsureH264Encoder(
+                            bgraFrame,
+                            monitorIndex,
+                            scalePercent,
+                            fps);
+
+                        if (encoder is null)
+                        {
+                            SetVideoTransport("jpeg");
+                            await SendCaptureSettingsAckAsync(ct);
+                            continue;
+                        }
+
+                        var timestampUs = (long)(
+                            Stopwatch.GetTimestamp() *
+                            (1_000_000.0 / Stopwatch.Frequency));
+
+                        var encoded = encoder.Encode(bgraFrame, timestampUs);
+                        var elapsedTicks = Stopwatch.GetTimestamp() - started;
+
+                        Volatile.Write(
+                            ref _captureBackend,
+                            $"{backend} + H.264 ({encoder.Name})");
+                        Interlocked.Add(ref _captureWindowElapsedTicks, elapsedTicks);
+                        Interlocked.Increment(ref _captureWindowSamples);
+
+                        if (encoded is null)
+                        {
+                            Interlocked.Increment(ref _captureWindowSkipped);
+                            await MaybeSendCaptureTelemetryAsync(ct);
+                            continue;
+                        }
+
+                        var packet = BuildH264Packet(encoded);
+                        await SendBinaryAsync(packet, ct);
+                        Interlocked.Increment(ref _captureWindowSent);
+                        Interlocked.Add(ref _captureWindowBytes, packet.Length);
+                        await MaybeSendCaptureTelemetryAsync(ct);
+
+                        var elapsedMs =
+                            elapsedTicks * 1000.0 / Stopwatch.Frequency;
+                        var remainingMs =
+                            framePeriodMs - (int)Math.Ceiling(elapsedMs);
+                        if (remainingMs > 0)
+                            await Task.Delay(remainingMs, ct);
+
+                        continue;
+                    }
+                    catch
+                    {
+                        ResetH264Encoder();
+                        SetVideoTransport("jpeg");
+                        await SendCaptureSettingsAckAsync(ct);
+                        continue;
+                    }
+                }
+
+                var jpegStarted = Stopwatch.GetTimestamp();
+                var jpegHasFrame = ScreenCapture.TryCaptureJpeg(
                     monitorIndex,
                     quality,
                     framePeriodMs,
                     scalePercent,
                     captureMode == "gdi",
                     out var frame,
-                    out var backend);
-                var elapsedTicks = Stopwatch.GetTimestamp() - started;
+                    out var jpegBackend);
+                var jpegElapsedTicks = Stopwatch.GetTimestamp() - jpegStarted;
 
-                Volatile.Write(ref _captureBackend, backend);
+                Volatile.Write(ref _captureBackend, jpegBackend);
 
-                if (!hasFrame || frame is null)
+                if (!jpegHasFrame || frame is null)
                 {
                     Interlocked.Increment(ref _captureWindowSkipped);
                     await MaybeSendCaptureTelemetryAsync(ct);
-                    if (backend == "capture unavailable")
+                    if (jpegBackend == "capture unavailable")
                         await Task.Delay(Math.Min(500, framePeriodMs), ct);
                     continue;
                 }
 
-                Interlocked.Add(ref _captureWindowElapsedTicks, elapsedTicks);
+                Interlocked.Add(
+                    ref _captureWindowElapsedTicks,
+                    jpegElapsedTicks);
                 Interlocked.Increment(ref _captureWindowSamples);
 
                 var previousFrame = _lastSentFrame;
-                if (previousFrame is not null && previousFrame.AsSpan().SequenceEqual(frame))
+                if (previousFrame is not null &&
+                    previousFrame.AsSpan().SequenceEqual(frame))
                 {
                     Interlocked.Increment(ref _captureWindowSkipped);
                     await MaybeSendCaptureTelemetryAsync(ct);
-                    var duplicateElapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
-                    var duplicateDelayMs = framePeriodMs - (int)Math.Ceiling(duplicateElapsedMs);
+
+                    var duplicateElapsedMs =
+                        jpegElapsedTicks * 1000.0 / Stopwatch.Frequency;
+                    var duplicateDelayMs =
+                        framePeriodMs - (int)Math.Ceiling(duplicateElapsedMs);
                     if (duplicateDelayMs > 0)
                         await Task.Delay(duplicateDelayMs, ct);
                     continue;
@@ -480,19 +568,132 @@ internal sealed class MainForm : Form
                 Interlocked.Add(ref _captureWindowBytes, frame.Length);
                 await MaybeSendCaptureTelemetryAsync(ct);
 
-                var elapsedMs = elapsedTicks * 1000.0 / Stopwatch.Frequency;
-                var remainingMs = framePeriodMs - (int)Math.Ceiling(elapsedMs);
-                if (remainingMs > 0)
-                    await Task.Delay(remainingMs, ct);
+                var jpegElapsedMs =
+                    jpegElapsedTicks * 1000.0 / Stopwatch.Frequency;
+                var jpegRemainingMs =
+                    framePeriodMs - (int)Math.Ceiling(jpegElapsedMs);
+                if (jpegRemainingMs > 0)
+                    await Task.Delay(jpegRemainingMs, ct);
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception)
         {
+            ResetH264Encoder();
             ScreenCapture.ResetAcceleratedCapture();
             if (!ct.IsCancellationRequested && !_explicitEndInProgress)
-                _ = ScheduleReconnectAsync("Screen stream interrupted.", ct);
+                _ = ScheduleReconnectAsync(
+                    "Screen stream interrupted.",
+                    ct);
         }
+    }
+
+    private H264MediaFoundationEncoder? EnsureH264Encoder(
+        CapturedBgraFrame frame,
+        int monitorIndex,
+        int scalePercent,
+        int fps)
+    {
+        if (_h264Encoder is not null &&
+            _h264Encoder.Width == frame.Width &&
+            _h264Encoder.Height == frame.Height &&
+            _h264Encoder.Fps == fps &&
+            _h264EncoderMonitor == monitorIndex &&
+            _h264EncoderScale == scalePercent &&
+            _h264EncoderFps == fps)
+            return _h264Encoder;
+
+        ResetH264Encoder();
+
+        var bitrate = CalculateH264Bitrate(
+            frame.Width,
+            frame.Height,
+            fps);
+
+        _h264Encoder = H264MediaFoundationEncoder.TryCreate(
+            frame.Width,
+            frame.Height,
+            fps,
+            bitrate);
+
+        if (_h264Encoder is null)
+            return null;
+
+        _h264EncoderMonitor = monitorIndex;
+        _h264EncoderScale = scalePercent;
+        _h264EncoderFps = fps;
+        return _h264Encoder;
+    }
+
+    private static int CalculateH264Bitrate(
+        int width,
+        int height,
+        int fps)
+    {
+        var estimate = (long)Math.Round(
+            width * (double)height * fps * 0.20);
+
+        return (int)Math.Clamp(
+            estimate,
+            500_000L,
+            5_000_000L);
+    }
+
+    private void SetVideoTransport(string transport)
+    {
+        var normalized = string.Equals(
+            transport,
+            "h264-annexb",
+            StringComparison.OrdinalIgnoreCase)
+            ? "h264-annexb"
+            : "jpeg";
+
+        var previous = Volatile.Read(ref _videoTransport);
+        if (string.Equals(
+                previous,
+                normalized,
+                StringComparison.Ordinal))
+            return;
+
+        Volatile.Write(ref _videoTransport, normalized);
+        _lastSentFrame = null;
+        ResetH264Encoder();
+    }
+
+    private void ResetH264Encoder()
+    {
+        var encoder = Interlocked.Exchange(
+            ref _h264Encoder,
+            null);
+
+        try { encoder?.Dispose(); } catch { }
+
+        _h264EncoderMonitor = -1;
+        _h264EncoderScale = 0;
+        _h264EncoderFps = 0;
+    }
+
+    private static byte[] BuildH264Packet(
+        H264EncodedFrame frame)
+    {
+        const int headerSize = 16;
+        var packet = new byte[
+            checked(headerSize + frame.Data.Length)];
+
+        packet[0] = (byte)'I';
+        packet[1] = (byte)'A';
+        packet[2] = (byte)'H';
+        packet[3] = (byte)'1';
+        packet[4] = frame.KeyFrame ? (byte)1 : (byte)0;
+
+        BinaryPrimitives.WriteInt64BigEndian(
+            packet.AsSpan(8, 8),
+            frame.TimestampMicroseconds);
+
+        frame.Data.CopyTo(
+            packet.AsSpan(headerSize));
+
+        return packet;
     }
 
     private async Task MaybeSendCaptureTelemetryAsync(CancellationToken ct)
