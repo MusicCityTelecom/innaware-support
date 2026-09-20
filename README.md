@@ -4,7 +4,7 @@ InnAware Support is a self-hosted **attended remote-support** system for TechFin
 
 The project is intentionally session-oriented rather than device/password-oriented. The initial MVP does **not** install unattended access or depend on an existing RustDesk/TeamViewer/AnyDesk installation.
 
-> **Status: early MVP / security review required before production use.** The server/API, technician browser console, Windows screen relay, and keyboard/mouse control path are implemented. Linux server tests/vet/build and the self-contained Windows x64 agent build pass in GitHub Actions. The Vultr server deployment is healthy; end-to-end customer/technician remote-control acceptance testing is still required before customer use.
+> **Status: functional attended-support preview / security review and code signing still required before broad production use.** Real end-to-end browser sessions have passed remote screen/control, DXGI/GDI capture switching, clipboard, bidirectional file transfer, reconnect/revocation, fullscreen, and customer-to-technician transfer acceptance. GitHub Actions builds the Linux broker, customer Windows agent, native technician portable package, and technician installer.
 
 ## Customer workflow
 
@@ -38,8 +38,9 @@ The short code is **not** the live remote-control key. It is single-use enrollme
 ## MVP components
 
 - **Go server/broker** — HTTPS API behind Apache, technician sessions, short-code enrollment, MySQL persistence, WebSocket relay.
-- **Technician operations console** — live sessions, searchable history, metrics, session notes/timeline, CSV export, remote viewer/control, multi-user team management, and administrative audit.
-- **Windows customer agent** — .NET 8 WinForms single-file executable, explicit terms/consent, screen capture, cursor capture, keyboard/mouse input, optional user-approved UAC restart.
+- **Technician web console** — live sessions, searchable history, metrics, notes/timeline, CSV export, remote viewer/control, detachable viewer, recording, chat/image chat, file/clipboard tools, network diagnostics, on-demand elevation request, team management, and administrative audit.
+- **Native Windows technician app** — .NET 8/WebView2 client using the same web authentication/session mechanism, packaged as both a portable ZIP and Windows installer. Its native overlay exposes capture mode, video transport, resolution, quality, FPS, detach, Fit/1:1, recording, chat, files, network refresh, elevation, fullscreen, and always-on-top controls.
+- **Windows customer agent** — .NET 8 WinForms single-file executable with explicit terms/consent, DXGI/GDI screen capture, cursor capture, keyboard/mouse input, chat/image chat, file transfer, clipboard, network diagnostics, reconnect/revocation, and customer-approved on-demand UAC elevation restart.
 - **Apache deployment** — existing TLS termination on `remote.innawareucp.com`; Go service stays on `127.0.0.1:8787`.
 - **MySQL/MariaDB** — sessions and audit events. Live screen frames are not intentionally persisted.
 
@@ -47,18 +48,15 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 
 ## Current limitations
 
-- selectable single-monitor viewing, but no simultaneous multi-monitor/composite desktop mode yet;
-- DXGI Desktop Duplication is preferred for capture with automatic GDI compatibility fallback, but changed frames are still JPEG rather than H.264/H.265;
-- adjustable 1–12 FPS capture (6 FPS default), adjustable JPEG quality, capture-backend selection, and idle-frame suppression;
-- text clipboard sync is available only when explicitly requested for the session;
-- bidirectional file transfer is explicit, temporary, and limited to 25 MB per file;
-- no secure-desktop/UAC prompt control;
-- no Ctrl+Alt+Del injection;
-- no permanent service/unattended access;
-- two built-in support roles (`admin` and `technician`), but no MFA/SSO or fine-grained permission matrix yet;
-- no signed Windows release yet.
+- selectable single-monitor viewing; simultaneous multi-monitor/composite desktop mode is not implemented yet;
+- JPEG remains the default production-safe frame transport; an experimental negotiated H.264/Annex-B path is being integrated with automatic JPEG fallback;
+- Windows secure-desktop/UAC prompt control and Ctrl+Alt+Del injection are intentionally unsupported;
+- no permanent service/unattended customer access;
+- built-in `admin` and `technician` roles exist, but MFA/SSO and a finer-grained permission matrix are still future work;
+- customer and technician Windows releases are not Authenticode-signed yet; Azure Artifact Signing setup is planned;
+- technician-side recording is currently local WebM canvas recording rather than centrally retained server recording.
 
-These are deliberate MVP boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md).
+These are deliberate boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md).
 
 ## VPS deployment
 
@@ -111,10 +109,14 @@ sudo bash deploy/update-vps.sh
 
 ## Build the Windows agent
 
-GitHub Actions builds the Windows x64 agent on every push to `main`. A successful `main` build also refreshes the prerelease tag `mvp-latest`, which the VPS installer uses automatically. The workflow artifact is named:
+GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`.
+
+Published Windows artifacts:
 
 ```text
-InnAware-Remote-Support-Windows-x64
+InnAware-Remote-Support.exe
+InnAware-Support-Technician-Portable.zip
+InnAware-Support-Technician-Setup.exe
 ```
 
 For a local Windows build with .NET 8 SDK:
@@ -186,9 +188,10 @@ cmd/server/                Go server entry point
 internal/app/              API, auth, MySQL store, WebSocket broker
 internal/webui/web/        Embedded customer/technician website
 agent/                     Windows WinForms customer agent
- deploy/                   VPS install/update/agent publishing scripts
- docs/                     Architecture, protocol, security notes
-.github/workflows/         Linux server + Windows agent CI/release builds
+technician/                Native Windows technician client + installer definition
+deploy/                    VPS install/update/agent publishing scripts
+docs/                      Architecture, protocol, security notes
+.github/workflows/          Linux server + customer/technician Windows CI/release builds
 ```
 
 ## Security
