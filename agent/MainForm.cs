@@ -799,6 +799,18 @@ internal sealed class MainForm : Form
                         await SendCaptureSettingsAckAsync(ct);
                     }
                 }
+                else if (type == "viewer_capabilities")
+                {
+                    var supportsH264 =
+                        root.TryGetProperty("h264_webcodecs", out var h264Element) &&
+                        h264Element.ValueKind == JsonValueKind.True;
+                    Volatile.Write(ref _viewerH264Supported, supportsH264 ? 1 : 0);
+                    if (!supportsH264 && Volatile.Read(ref _videoTransport) == "h264-annexb")
+                    {
+                        SetVideoTransport("jpeg");
+                        await SendCaptureSettingsAckAsync(ct);
+                    }
+                }
                 else if (type == "viewer_telemetry")
                 {
                     if (ApplyViewerTelemetry(root))
@@ -1644,8 +1656,13 @@ internal sealed class MainForm : Form
     private void ApplyViewerStatus(bool connected)
     {
         Volatile.Write(ref _viewerConnected, connected ? 1 : 0);
-        if (connected)
-            _lastSentFrame = null;
+        _lastSentFrame = null;
+
+        if (!connected)
+        {
+            Volatile.Write(ref _viewerH264Supported, 0);
+            SetVideoTransport("jpeg");
+        }
 
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke((Action)(() =>
@@ -1724,6 +1741,22 @@ internal sealed class MainForm : Form
                 _lastSentFrame = null;
                 ScreenCapture.ResetAcceleratedCapture();
             }
+        }
+
+        if (root.TryGetProperty("video_transport", out var transportElement))
+        {
+            var requested = string.Equals(
+                transportElement.GetString(),
+                "h264-annexb",
+                StringComparison.OrdinalIgnoreCase)
+                ? "h264-annexb"
+                : "jpeg";
+
+            if (requested == "h264-annexb" &&
+                Volatile.Read(ref _viewerH264Supported) != 1)
+                requested = "jpeg";
+
+            SetVideoTransport(requested);
         }
 
         if (!IsDisposed && IsHandleCreated)
