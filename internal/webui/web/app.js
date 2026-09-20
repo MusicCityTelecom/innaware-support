@@ -375,6 +375,8 @@ function resetViewerCanvas() {
 }
 function closeViewer(){
   stopViewerRecording(true);
+  resetH264Decoder();
+  state.videoTransport='jpeg';
   if(state.ws){state.ws.close();state.ws=null;}
   if(document.fullscreenElement) document.exitFullscreen().catch(()=>{});
   const popout = new URLSearchParams(location.search).get('popout') === '1';
