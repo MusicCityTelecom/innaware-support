@@ -20,8 +20,10 @@ type Config struct {
 	CodeSecret        []byte
 	SessionTTL        time.Duration
 	LiveSessionTTL    time.Duration
-	AgentDownloadPath string
-	TrustProxy        bool
+	AgentDownloadPath          string
+	TechnicianPortablePath     string
+	TechnicianInstallerPath    string
+	TrustProxy                 bool
 }
 
 func LoadConfig() (Config, error) {
@@ -31,8 +33,10 @@ func LoadConfig() (Config, error) {
 		MySQLDSN:          os.Getenv("MYSQL_DSN"),
 		TechUsername:      getenv("TECH_USERNAME", "admin"),
 		TechPassword:      os.Getenv("TECH_PASSWORD"),
-		AgentDownloadPath: getenv("AGENT_DOWNLOAD_PATH", "/opt/innaware-support/downloads/InnAwareSupport.exe"),
-		TrustProxy:        getenvBool("TRUST_PROXY", true),
+		AgentDownloadPath:       getenv("AGENT_DOWNLOAD_PATH", "/opt/innaware-support/downloads/InnAwareSupport.exe"),
+		TechnicianPortablePath:  getenv("TECHNICIAN_PORTABLE_PATH", "/opt/innaware-support/downloads/InnAware-Support-Technician-Portable.zip"),
+		TechnicianInstallerPath: getenv("TECHNICIAN_INSTALLER_PATH", "/opt/innaware-support/downloads/InnAware-Support-Technician-Setup.exe"),
+		TrustProxy:              getenvBool("TRUST_PROXY", true),
 	}
 
 	if cfg.MySQLDSN == "" {

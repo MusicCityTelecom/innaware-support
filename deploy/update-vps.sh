@@ -8,6 +8,8 @@ APP_ROOT=/opt/innaware-support
 BIN="$APP_ROOT/bin/innaware-support-server"
 NEW_BIN="$APP_ROOT/bin/innaware-support-server.new"
 DOWNLOAD="$APP_ROOT/downloads/InnAwareSupport.exe"
+TECH_PORTABLE="$APP_ROOT/downloads/InnAware-Support-Technician-Portable.zip"
+TECH_INSTALLER="$APP_ROOT/downloads/InnAware-Support-Technician-Setup.exe"
 STAMP="$(date -u +%Y%m%d-%H%M%S)"
 BACKUP="/root/innaware-support-update-$STAMP"
 
@@ -80,27 +82,60 @@ if [[ $healthy -ne 1 ]]; then
   exit 1
 fi
 
-echo "New server is healthy. Refreshing the Windows preview agent..."
-AGENT_URL="${AGENT_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Remote-Support.exe}"
-TMP_AGENT="$(mktemp "$APP_ROOT/downloads/.InnAwareSupport.exe.XXXXXX")"
-if curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 "$AGENT_URL" -o "$TMP_AGENT"; then
-  python3 - "$TMP_AGENT" <<'PY_AGENT'
+download_release_asset() {
+  local label="$1"
+  local url="$2"
+  local destination="$3"
+  local kind="$4"
+
+  local dir tmp
+  dir="$(dirname "$destination")"
+  tmp="$(mktemp "$dir/.download.XXXXXX")"
+
+  if ! curl --fail --location --retry 3 --connect-timeout 15 --max-time 300 "$url" -o "$tmp"; then
+    rm -f "$tmp"
+    echo "WARNING: Could not refresh $label; keeping the currently published copy." >&2
+    return 0
+  fi
+
+  python3 - "$tmp" "$kind" "$label" <<'PY_ASSET'
 import hashlib
 import pathlib
 import sys
+import zipfile
 
-p = pathlib.Path(sys.argv[1])
-data = p.read_bytes()
-if len(data) < 100_000 or not data.startswith(b'MZ'):
-    raise SystemExit('Downloaded Windows agent is not a plausible PE executable')
-print("Windows agent SHA-256:", hashlib.sha256(data).hexdigest())
-PY_AGENT
-  chmod 0644 "$TMP_AGENT"
-  mv -f "$TMP_AGENT" "$DOWNLOAD"
-else
-  rm -f "$TMP_AGENT"
-  echo "WARNING: Could not refresh the Windows agent preview build; keeping the currently published copy." >&2
-fi
+path = pathlib.Path(sys.argv[1])
+kind = sys.argv[2]
+label = sys.argv[3]
+data = path.read_bytes()
+
+if kind == "pe":
+    if len(data) < 100_000 or not data.startswith(b"MZ"):
+        raise SystemExit(f"{label} is not a plausible PE executable")
+elif kind == "zip":
+    if len(data) < 10_000 or not data.startswith(b"PK"):
+        raise SystemExit(f"{label} is not a plausible ZIP archive")
+    if not zipfile.is_zipfile(path):
+        raise SystemExit(f"{label} ZIP validation failed")
+else:
+    raise SystemExit(f"unknown asset validation kind: {kind}")
+
+print(f"{label} SHA-256:", hashlib.sha256(data).hexdigest())
+PY_ASSET
+
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$destination"
+}
+
+echo "New server is healthy. Refreshing Windows release artifacts..."
+
+AGENT_URL="${AGENT_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Remote-Support.exe}"
+TECH_PORTABLE_URL="${TECH_PORTABLE_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Support-Technician-Portable.zip}"
+TECH_INSTALLER_URL="${TECH_INSTALLER_URL:-https://github.com/MusicCityTelecom/innaware-support/releases/download/mvp-latest/InnAware-Support-Technician-Setup.exe}"
+
+download_release_asset "Windows customer agent" "$AGENT_URL" "$DOWNLOAD" pe
+download_release_asset "Technician portable" "$TECH_PORTABLE_URL" "$TECH_PORTABLE" zip
+download_release_asset "Technician installer" "$TECH_INSTALLER_URL" "$TECH_INSTALLER" pe
 
 apache2ctl configtest
 curl -fsS "${PUBLIC_BASE_URL:-https://remote.innawareucp.com}/api/health"
