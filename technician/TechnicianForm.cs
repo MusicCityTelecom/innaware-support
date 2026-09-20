@@ -13,6 +13,7 @@ internal sealed class TechnicianForm : Form
     private readonly StatusStrip _status = new();
     private readonly ToolStripStatusLabel _statusText = new();
     private readonly ToolStripComboBox _capture = new();
+    private readonly ToolStripComboBox _video = new();
     private readonly ToolStripComboBox _resolution = new();
     private readonly ToolStripComboBox _quality = new();
     private readonly ToolStripComboBox _fps = new();
@@ -86,6 +87,17 @@ internal sealed class TechnicianForm : Form
             ],
             "auto",
             82);
+
+        ConfigureSelector(
+            "Video",
+            _video,
+            "videoTransportSelect",
+            [
+                new("JPEG", "jpeg"),
+                new("H.264", "h264-annexb")
+            ],
+            "jpeg",
+            72);
 
         ConfigureSelector(
             "Resolution",
@@ -197,11 +209,14 @@ internal sealed class TechnicianForm : Form
     {
         await ExecuteScriptAsync(
             $"(()=>{{const e=document.getElementById({JsonString(id)});if(!e)return false;e.value={JsonString(value)};e.dispatchEvent(new Event('change',{{bubbles:true}}));return true;}})();");
+        await Task.Delay(75);
+        await SyncViewerToolbarAsync();
     }
 
     private async Task SyncViewerToolbarAsync()
     {
         await SyncSelectorAsync(_capture, "captureModeSelect");
+        await SyncSelectorAsync(_video, "videoTransportSelect");
         await SyncSelectorAsync(_resolution, "scaleSelect");
         await SyncSelectorAsync(_quality, "qualitySelect");
         await SyncSelectorAsync(_fps, "fpsSelect");

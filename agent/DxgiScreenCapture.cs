@@ -234,6 +234,61 @@ internal sealed class DxgiScreenCapture : IDisposable
         }
     }
 
+    public DxgiCaptureStatus TryCaptureBgra(int timeoutMs, int scalePercent, out CapturedBgraFrame? frame)
+    {
+        frame = null;
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var result = _duplication.AcquireNextFrame(
+            (uint)Math.Max(0, timeoutMs),
+            out _,
+            out IDXGIResource? resource);
+
+        if (result.Code == DxgiErrorWaitTimeout)
+        {
+            resource?.Dispose();
+            return DxgiCaptureStatus.NoFrame;
+        }
+
+        if (result.Code == DxgiErrorAccessLost)
+        {
+            resource?.Dispose();
+            return DxgiCaptureStatus.AccessLost;
+        }
+
+        if (result.Failure)
+        {
+            resource?.Dispose();
+            throw new InvalidOperationException($"DXGI AcquireNextFrame failed: 0x{result.Code:X8}");
+        }
+
+        try
+        {
+            using var source = resource!.QueryInterface<ID3D11Texture2D>();
+            _context.CopyResource(_staging, source);
+
+            var mapped = _context.Map(_staging, 0, MapMode.Read);
+            try
+            {
+                using var bitmap = new Bitmap(Width, Height, PixelFormat.Format32bppArgb);
+                CopyMappedFrame(bitmap, mapped.DataPointer, (int)mapped.RowPitch);
+                DrawCursor(bitmap);
+                frame = CapturedBgraFrame.FromBitmap(bitmap, scalePercent);
+            }
+            finally
+            {
+                _context.Unmap(_staging, 0);
+            }
+
+            return DxgiCaptureStatus.Frame;
+        }
+        finally
+        {
+            resource?.Dispose();
+            _duplication.ReleaseFrame();
+        }
+    }
+
     private static byte[] EncodeJpeg(Bitmap source, long quality, int scalePercent)
     {
         scalePercent = Math.Clamp(scalePercent, 50, 100);
