@@ -59,7 +59,16 @@ jobs:
       - name: Restore
         run: dotnet restore agent/InnAwareSupport.Agent.csproj
       - name: Publish Windows x64 single-file agent
-        run: dotnet publish agent/InnAwareSupport.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/agent
+        shell: pwsh
+        run: |
+          $infoVersion = "0.8.0-preview+$env:GITHUB_SHA"
+          dotnet publish agent/InnAwareSupport.Agent.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            "-p:InformationalVersion=$infoVersion" `
+            -o dist/agent
       - name: Normalize artifact filename
         shell: pwsh
         run: |
@@ -78,6 +87,10 @@ jobs:
           if ($info.ProductName -ne 'InnAware Remote Support') { throw "Unexpected ProductName: $($info.ProductName)" }
           if ($info.CompanyName -ne 'InnAware') { throw "Unexpected CompanyName: $($info.CompanyName)" }
           if ($info.FileVersion -ne '0.8.0.0') { throw "Unexpected FileVersion: $($info.FileVersion)" }
+          $shortSha = $env:GITHUB_SHA.Substring(0, 12)
+          if ($info.ProductVersion -notlike "*$shortSha*") {
+            throw "Customer ProductVersion does not contain build SHA $shortSha: $($info.ProductVersion)"
+          }
           $signature = Get-AuthenticodeSignature $path
           Write-Host "Authenticode:    $($signature.Status)"
           if ($signature.SignerCertificate) {
@@ -100,7 +113,15 @@ jobs:
       - name: Restore technician client
         run: dotnet restore technician/InnAwareSupport.Technician.csproj
       - name: Publish technician client
-        run: dotnet publish technician/InnAwareSupport.Technician.csproj -c Release -r win-x64 --self-contained true -o dist/technician
+        shell: pwsh
+        run: |
+          $infoVersion = "0.8.0-preview+$env:GITHUB_SHA"
+          dotnet publish technician/InnAwareSupport.Technician.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            "-p:InformationalVersion=$infoVersion" `
+            -o dist/technician
       - name: Verify technician client
         shell: pwsh
         run: |
@@ -118,6 +139,10 @@ jobs:
           }
           if ($info.FileVersion -ne '0.8.0.0') {
             throw "Unexpected technician FileVersion: $($info.FileVersion)"
+          }
+          $shortSha = $env:GITHUB_SHA.Substring(0, 12)
+          if ($info.ProductVersion -notlike "*$shortSha*") {
+            throw "Technician ProductVersion does not contain build SHA $shortSha: $($info.ProductVersion)"
           }
           $signature = Get-AuthenticodeSignature $exe
           Write-Host "Authenticode: $($signature.Status)"
