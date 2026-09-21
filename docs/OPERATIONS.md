@@ -97,7 +97,8 @@ The active viewer supports:
 - JPEG or negotiated H.264 video transport where supported;
 - 100%, 75%, and 50% transport resolution;
 - JPEG quality and fixed/adaptive frame-rate control;
-- Fit, 1:1, browser fullscreen, and detachable/pop-out viewing;
+- Fit, 1:1, browser fullscreen, and detachable/pop-out viewing with a focused screen mode;
+- local PNG screenshots with a session-timeline event but no screenshot upload to the VPS;
 - keyboard/mouse control;
 - text clipboard send/get;
 - technician-to-customer and customer-to-technician files;
@@ -117,7 +118,7 @@ Authenticated technicians can download either:
 
 The native Windows client embeds the same web application with WebView2 and therefore uses the same authentication, RBAC, API, cookies, and live-session mechanisms.
 
-Its native toolbar mirrors the viewer controls, including monitor, capture backend, video transport, resolution, quality, FPS, detach, Fit/1:1, recording, chat, files, network tools, elevation, fullscreen, and always-on-top.
+Its native toolbar mirrors the viewer controls, including monitor, capture backend, video transport, resolution, quality, FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network tools, elevation, fullscreen, and always-on-top.
 
 The custom `innaware-support-tech://` protocol lets the browser hand an active session to the installed technician application.
 
