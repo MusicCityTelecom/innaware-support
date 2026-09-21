@@ -169,7 +169,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/installer | Out-Null
           $publish = (Resolve-Path dist/technician).Path
           $output = (Resolve-Path dist/installer).Path
-          & $iscc "/DPublishDir=$publish" "/DOutputDir=$output" technician/installer.iss
+          & $iscc "/DPublishDir=$publish" "/DOutputDir=$output" "/DAppVersion=0.8.0" technician/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit $LASTEXITCODE" }
           $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
           if (-not (Test-Path $installer)) { throw "Technician installer was not created." }
