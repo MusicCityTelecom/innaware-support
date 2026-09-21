@@ -7,7 +7,10 @@
 #endif
 
 #define MyAppName "InnAware Support Technician"
-#define MyAppVersion "0.6.0"
+#ifndef AppVersion
+  #define AppVersion "0.8.0"
+#endif
+#define MyAppVersion AppVersion
 #define MyAppPublisher "InnAware"
 #define MyAppExeName "InnAwareSupportTechnician.exe"
 
