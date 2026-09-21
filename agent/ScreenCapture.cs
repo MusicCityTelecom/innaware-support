@@ -4,10 +4,18 @@ using System.Runtime.InteropServices;
 
 namespace InnAwareSupport.Agent;
 
-internal sealed record MonitorInfo(int Index, string DeviceName, int Width, int Height, bool Primary);
+internal sealed record MonitorInfo(
+    int Index,
+    string DeviceName,
+    int Left,
+    int Top,
+    int Width,
+    int Height,
+    bool Primary);
 
 internal static class ScreenCapture
 {
+    public const int AllMonitorsIndex = -2;
     private static readonly object CaptureLock = new();
     private static DxgiScreenCapture? _dxgi;
     private static int _dxgiScreenIndex = -1;
@@ -27,7 +35,14 @@ internal static class ScreenCapture
         for (var i = 0; i < screens.Length; i++)
         {
             var s = screens[i];
-            result[i] = new MonitorInfo(i, s.DeviceName, s.Bounds.Width, s.Bounds.Height, s.Primary);
+            result[i] = new MonitorInfo(
+                i,
+                s.DeviceName,
+                s.Bounds.Left,
+                s.Bounds.Top,
+                s.Bounds.Width,
+                s.Bounds.Height,
+                s.Primary);
         }
         return result;
     }
@@ -36,6 +51,9 @@ internal static class ScreenCapture
     {
         var screens = Screen.AllScreens;
         if (screens.Length == 0)
+            return SystemInformation.VirtualScreen;
+
+        if (screenIndex == AllMonitorsIndex && screens.Length > 1)
             return SystemInformation.VirtualScreen;
 
         if (screenIndex < 0 || screenIndex >= screens.Length)
@@ -50,6 +68,8 @@ internal static class ScreenCapture
     {
         var screens = Screen.AllScreens;
         if (screens.Length == 0) return 0;
+        if (screenIndex == AllMonitorsIndex && screens.Length > 1)
+            return AllMonitorsIndex;
         if (screenIndex >= 0 && screenIndex < screens.Length) return screenIndex;
         var primary = Array.FindIndex(screens, s => s.Primary);
         return primary >= 0 ? primary : 0;
@@ -66,9 +86,11 @@ internal static class ScreenCapture
     {
         screenIndex = NormalizeScreenIndex(screenIndex);
 
+        var allMonitors = screenIndex == AllMonitorsIndex;
+
         lock (CaptureLock)
         {
-            if (!forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
+            if (!allMonitors && !forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
             {
                 try
                 {
@@ -99,7 +121,9 @@ internal static class ScreenCapture
             try
             {
                 jpeg = CaptureJpegGdi(screenIndex, quality, scalePercent);
-                backend = forceGdi ? "GDI compatibility" : "GDI fallback";
+                backend = allMonitors
+                    ? "GDI all monitors"
+                    : forceGdi ? "GDI compatibility" : "GDI fallback";
                 return true;
             }
             catch
@@ -121,9 +145,11 @@ internal static class ScreenCapture
     {
         screenIndex = NormalizeScreenIndex(screenIndex);
 
+        var allMonitors = screenIndex == AllMonitorsIndex;
+
         lock (CaptureLock)
         {
-            if (!forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
+            if (!allMonitors && !forceGdi && DateTime.UtcNow >= _dxgiRetryAfterUtc)
             {
                 try
                 {
@@ -154,7 +180,9 @@ internal static class ScreenCapture
             try
             {
                 frame = CaptureBgraGdi(screenIndex, scalePercent);
-                backend = forceGdi ? "GDI compatibility" : "GDI fallback";
+                backend = allMonitors
+                    ? "GDI all monitors"
+                    : forceGdi ? "GDI compatibility" : "GDI fallback";
                 return true;
             }
             catch

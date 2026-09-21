@@ -12,6 +12,7 @@ internal sealed class TechnicianForm : Form
     private readonly ToolStrip _tools = new();
     private readonly StatusStrip _status = new();
     private readonly ToolStripStatusLabel _statusText = new();
+    private readonly ToolStripComboBox _monitor = new();
     private readonly ToolStripComboBox _capture = new();
     private readonly ToolStripComboBox _video = new();
     private readonly ToolStripComboBox _resolution = new();
@@ -76,6 +77,21 @@ internal sealed class TechnicianForm : Form
         AddButton("Refresh", (_, _) => _web.Reload());
 
         _tools.Items.Add(new ToolStripSeparator());
+
+        _tools.Items.Add(new ToolStripLabel("Monitor"));
+        _monitor.DropDownStyle = ComboBoxStyle.DropDownList;
+        _monitor.AutoSize = false;
+        _monitor.Width = 150;
+        _monitor.Items.Add(new SelectorChoice("Monitor 1", "0"));
+        _monitor.SelectedIndex = 0;
+        _monitor.ComboBox.DropDown += async (_, _) =>
+            await SyncMonitorSelectorAsync();
+        _monitor.ComboBox.SelectionChangeCommitted += async (_, _) =>
+        {
+            if (_monitor.SelectedItem is SelectorChoice selected)
+                await SetWebSelectValueAsync("monitorSelect", selected.Value);
+        };
+        _tools.Items.Add(_monitor);
 
         ConfigureSelector(
             "Capture",
@@ -215,11 +231,83 @@ internal sealed class TechnicianForm : Form
 
     private async Task SyncViewerToolbarAsync()
     {
+        await SyncMonitorSelectorAsync();
         await SyncSelectorAsync(_capture, "captureModeSelect");
         await SyncSelectorAsync(_video, "videoTransportSelect");
         await SyncSelectorAsync(_resolution, "scaleSelect");
         await SyncSelectorAsync(_quality, "qualitySelect");
         await SyncSelectorAsync(_fps, "fpsSelect");
+    }
+
+    private sealed record BrowserSelectOption(
+        string Label,
+        string Value,
+        bool Selected);
+
+    private async Task SyncMonitorSelectorAsync()
+    {
+        if (_web.CoreWebView2 is null)
+            return;
+
+        try
+        {
+            var raw = await _web.CoreWebView2.ExecuteScriptAsync(
+                "(()=>{const e=document.getElementById('monitorSelect');" +
+                "if(!e)return '';" +
+                "return JSON.stringify(Array.from(e.options).map(o=>({" +
+                "Label:o.textContent||o.text||o.value," +
+                "Value:o.value," +
+                "Selected:o.selected" +
+                "})));})();");
+
+            var json = System.Text.Json.JsonSerializer.Deserialize<string>(raw);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var options =
+                System.Text.Json.JsonSerializer.Deserialize<BrowserSelectOption[]>(
+                    json);
+
+            if (options is null || options.Length == 0)
+                return;
+
+            var current =
+                options.FirstOrDefault(x => x.Selected)?.Value
+                ?? options[0].Value;
+
+            _monitor.ComboBox.BeginUpdate();
+            try
+            {
+                _monitor.Items.Clear();
+                foreach (var option in options)
+                    _monitor.Items.Add(
+                        new SelectorChoice(option.Label, option.Value));
+
+                foreach (var item in _monitor.Items)
+                {
+                    if (item is SelectorChoice choice &&
+                        string.Equals(
+                            choice.Value,
+                            current,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        _monitor.SelectedItem = choice;
+                        break;
+                    }
+                }
+
+                if (_monitor.SelectedIndex < 0 && _monitor.Items.Count > 0)
+                    _monitor.SelectedIndex = 0;
+            }
+            finally
+            {
+                _monitor.ComboBox.EndUpdate();
+            }
+        }
+        catch
+        {
+            // Login/console pages do not expose the live monitor selector.
+        }
     }
 
     private async Task SyncSelectorAsync(
