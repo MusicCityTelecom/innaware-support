@@ -146,6 +146,10 @@ jobs:
           $output = (Resolve-Path dist/installer).Path
           & $iscc "/DPublishDir=$publish" "/DOutputDir=$output" technician/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit $LASTEXITCODE" }
+          $installerSource = Get-Content technician/installer.iss -Raw
+          if ($installerSource -notmatch '#define MyAppVersion "0\\.9\\.0-preview"') {
+            throw "Technician installer AppVersion is not 0.9.0-preview."
+          }
           $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
           if (-not (Test-Path $installer)) { throw "Technician installer was not created." }
           Copy-Item $installer dist/InnAware-Support-Technician-Setup.exe -Force
