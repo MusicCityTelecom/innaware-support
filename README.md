@@ -4,7 +4,7 @@ InnAware Support is a self-hosted **attended remote-support** system for TechFin
 
 The project is intentionally session-oriented rather than device/password-oriented. The initial MVP does **not** install unattended access or depend on an existing RustDesk/TeamViewer/AnyDesk installation.
 
-> **Status: functional attended-support preview / security review and code signing still required before broad production use.** Real end-to-end browser sessions have passed remote screen/control, DXGI/GDI capture switching, clipboard, bidirectional file transfer, reconnect/revocation, fullscreen, and customer-to-technician transfer acceptance. GitHub Actions builds the Linux broker, customer Windows agent, native technician portable package, and technician installer.
+> **Status: functional attended-support beta preview / security review and code signing still required before broad production use.** Real end-to-end browser sessions have passed remote screen/control, DXGI/GDI capture switching, clipboard, bidirectional file transfer, reconnect/revocation, fullscreen, and customer-to-technician transfer acceptance. Current main also includes negotiated H.264 with JPEG fallback, composite multi-monitor viewing, chat/image chat, local recording, network diagnostics, customer-approved elevation, focused pop-out viewing, and local technician screenshots. GitHub Actions builds the Linux broker, customer Windows agent, native technician portable package, and technician installer.
 
 ## Customer workflow
 
@@ -38,8 +38,8 @@ The short code is **not** the live remote-control key. It is single-use enrollme
 ## MVP components
 
 - **Go server/broker** — HTTPS API behind Apache, technician sessions, short-code enrollment, MySQL persistence, WebSocket relay.
-- **Technician web console** — live sessions, searchable history, metrics, notes/timeline, CSV export, remote viewer/control, detachable viewer, recording, chat/image chat, file/clipboard tools, network diagnostics, on-demand elevation request, team management, and administrative audit.
-- **Native Windows technician app** — .NET 8/WebView2 client using the same web authentication/session mechanism, packaged as both a portable ZIP and Windows installer. Its native overlay exposes monitor selection, capture mode, video transport, resolution, quality, FPS, detach, Fit/1:1, recording, chat, files, network refresh, elevation, fullscreen, and always-on-top controls.
+- **Technician web console** — live sessions, searchable history, metrics, notes/timeline, CSV export, remote viewer/control, detachable focused viewer, local PNG screenshots, recording, chat/image chat, file/clipboard tools, network diagnostics, on-demand elevation request, team management, and administrative audit.
+- **Native Windows technician app** — .NET 8/WebView2 client using the same web authentication/session mechanism, packaged as both a portable ZIP and Windows installer. Its native overlay exposes monitor selection, capture mode, video transport, resolution, quality, FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network refresh, elevation, fullscreen, and always-on-top controls.
 - **Windows customer agent** — .NET 8 WinForms single-file executable with explicit terms/consent, DXGI/GDI screen capture, cursor capture, keyboard/mouse input, chat/image chat, file transfer, clipboard, network diagnostics, reconnect/revocation, and customer-approved on-demand UAC elevation restart.
 - **Apache deployment** — existing TLS termination on `remote.innawareucp.com`; Go service stays on `127.0.0.1:8787`.
 - **MySQL/MariaDB** — sessions and audit events. Live screen frames are not intentionally persisted.
@@ -49,7 +49,7 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 ## Current limitations
 
 - individual monitor selection plus a composite **All monitors** virtual-desktop view are supported; independent simultaneous per-monitor streams/windows are not implemented yet;
-- JPEG remains the default production-safe frame transport; an experimental negotiated H.264/Annex-B path is being integrated with automatic JPEG fallback;
+- JPEG remains the default production-safe frame transport; negotiated H.264/Annex-B transport is implemented as an optional beta path with automatic JPEG fallback and still requires broader hardware/driver acceptance testing;
 - Windows secure-desktop/UAC prompt control and Ctrl+Alt+Del injection are intentionally unsupported;
 - no permanent service/unattended customer access;
 - built-in `admin` and `technician` roles exist, but MFA/SSO and a finer-grained permission matrix are still future work;
@@ -109,7 +109,7 @@ sudo bash deploy/update-vps.sh
 
 ## Build the Windows agent
 
-GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`.
+GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`. The current beta identity is `0.9.0-preview`.
 
 Published Windows artifacts:
 
