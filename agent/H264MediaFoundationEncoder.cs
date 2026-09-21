@@ -90,10 +90,15 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         int width,
         int height,
         int fps,
-        int bitrate)
+        int bitrate,
+        out string? error)
     {
+        error = null;
         if (width < 2 || height < 2 || (width & 1) != 0 || (height & 1) != 0)
+        {
+            error = $"H.264 requires even frame dimensions; received {width}x{height}.";
             return null;
+        }
 
         MediaFoundationRuntime.EnsureStarted();
 
@@ -106,12 +111,13 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                    EnumFlag.EnumFlagSyncmft |
                    EnumFlag.EnumFlagAsyncmft |
                    EnumFlag.EnumFlagSortandfilter),
-            hardware: true);
+            hardware: true,
+            out var hardwareError);
 
         if (encoder is not null)
             return encoder;
 
-        return TryCreateFromCandidates(
+        encoder = TryCreateFromCandidates(
             width,
             height,
             fps,
@@ -120,7 +126,14 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                    EnumFlag.EnumFlagAsyncmft |
                    EnumFlag.EnumFlagLocalmft |
                    EnumFlag.EnumFlagSortandfilter),
-            hardware: false);
+            hardware: false,
+            out var softwareError);
+
+        if (encoder is null)
+            error = softwareError ?? hardwareError ??
+                $"No Media Foundation H.264 encoder accepted {width}x{height} at {fps} FPS.";
+
+        return encoder;
     }
 
     private static H264MediaFoundationEncoder? TryCreateFromCandidates(
@@ -129,8 +142,11 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
         int fps,
         int bitrate,
         uint flags,
-        bool hardware)
+        bool hardware,
+        out string? error)
     {
+        error = null;
+        var sawCandidate = false;
         var output = new RegisterTypeInfo
         {
             GuidMajorType = MediaTypeGuids.Video,
@@ -145,8 +161,10 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
 
         foreach (var candidate in candidates)
         {
+            sawCandidate = true;
             IMFActivate? retained = null;
             IMFTransform? transform = null;
+            var candidateName = hardware ? "hardware H.264 encoder" : "H.264 encoder";
             try
             {
                 retained = new IMFActivate(candidate.NativePointer);
@@ -162,6 +180,7 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                     isAsync != 0;
 
                 var name = ReadFriendlyName(candidate);
+                candidateName = string.IsNullOrWhiteSpace(name) ? candidateName : name;
                 var built = new H264MediaFoundationEncoder(
                     retained,
                     transform,
@@ -177,8 +196,9 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                 transform = null;
                 return built;
             }
-            catch
+            catch (Exception ex)
             {
+                error = $"{candidateName}: {ex.GetType().Name}: {ex.Message}";
                 transform?.Dispose();
                 if (retained is not null)
                 {
@@ -187,6 +207,11 @@ internal sealed class H264MediaFoundationEncoder : IDisposable
                 }
             }
         }
+
+        if (!sawCandidate)
+            error = hardware
+                ? "No hardware Media Foundation H.264 encoder candidates were found."
+                : "No Media Foundation H.264 encoder candidates were found.";
 
         return null;
     }

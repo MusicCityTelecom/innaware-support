@@ -45,6 +45,7 @@ internal sealed class MainForm : Form
     private int _viewerH264Supported;
     private string _videoTransport = "jpeg";
     private H264MediaFoundationEncoder? _h264Encoder;
+    private string? _h264LastError;
     private int _h264EncoderMonitor = -1;
     private int _h264EncoderScale;
     private int _h264EncoderFps;
@@ -398,6 +399,7 @@ internal sealed class MainForm : Form
             h264_hardware_available = _h264Capability.HardwareAvailable,
             h264_hardware_encoders = _h264Capability.HardwareEncoders,
             h264_probe_error = _h264Capability.Error,
+            h264_last_error = _h264LastError,
             video_transport = Volatile.Read(ref _videoTransport),
             network,
             live_expires_at = _liveExpiresAtUtc
@@ -474,6 +476,8 @@ internal sealed class MainForm : Form
 
                         if (encoder is null)
                         {
+                            _h264LastError ??=
+                                $"No Media Foundation H.264 encoder accepted {bgraFrame.Width}x{bgraFrame.Height} at {fps} FPS.";
                             SetVideoTransport("jpeg");
                             await SendCaptureSettingsAckAsync(ct);
                             continue;
@@ -499,6 +503,7 @@ internal sealed class MainForm : Form
                             continue;
                         }
 
+                        _h264LastError = null;
                         var packet = BuildH264Packet(encoded);
                         await SendBinaryAsync(packet, ct);
                         Interlocked.Increment(ref _captureWindowSent);
@@ -514,8 +519,9 @@ internal sealed class MainForm : Form
 
                         continue;
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        _h264LastError = DescribeH264Failure(ex);
                         ResetH264Encoder();
                         SetVideoTransport("jpeg");
                         await SendCaptureSettingsAckAsync(ct);
@@ -618,10 +624,17 @@ internal sealed class MainForm : Form
             frame.Width,
             frame.Height,
             fps,
-            bitrate);
+            bitrate,
+            out var createError);
 
         if (_h264Encoder is null)
+        {
+            _h264LastError = createError ??
+                $"No Media Foundation H.264 encoder accepted {frame.Width}x{frame.Height} at {fps} FPS.";
             return null;
+        }
+
+        _h264LastError = null;
 
         _h264EncoderMonitor = monitorIndex;
         _h264EncoderScale = scalePercent;
@@ -641,6 +654,14 @@ internal sealed class MainForm : Form
             estimate,
             500_000L,
             5_000_000L);
+    }
+
+    private static string DescribeH264Failure(Exception ex)
+    {
+        var message = string.IsNullOrWhiteSpace(ex.Message)
+            ? ex.GetType().Name
+            : $"{ex.GetType().Name}: {ex.Message}";
+        return message.Length <= 300 ? message : message[..300];
     }
 
     private void SetVideoTransport(string transport)
@@ -1826,7 +1847,8 @@ internal sealed class MainForm : Form
             adaptive_fps = Volatile.Read(ref _adaptiveFpsEnabled) == 1,
             capture_mode = Volatile.Read(ref _captureMode),
             video_transport = Volatile.Read(ref _videoTransport),
-            h264_encoder = _h264Encoder?.Name
+            h264_encoder = _h264Encoder?.Name,
+            h264_error = _h264LastError
         });
         await SendTextAsync(message, ct);
     }
