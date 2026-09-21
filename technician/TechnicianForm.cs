@@ -30,7 +30,7 @@ internal sealed class TechnicianForm : Form
             ? _server
             : startUrl;
 
-        Text = "InnAware Support Technician";
+        Text = $"InnAware Support Technician {TechnicianBuildInfo.Version}";
         Width = 1500;
         Height = 950;
         MinimumSize = new Size(900, 650);
@@ -40,7 +40,8 @@ internal sealed class TechnicianForm : Form
         BuildToolbar();
 
         _web.Dock = DockStyle.Fill;
-        _statusText.Text = "Starting technician console…";
+        _statusText.Text =
+            $"Starting technician console · {TechnicianBuildInfo.InformationalVersion}";
         _status.Items.Add(_statusText);
 
         Controls.Add(_web);
@@ -372,8 +373,8 @@ internal sealed class TechnicianForm : Form
             core.NavigationCompleted += async (_, e) =>
             {
                 _statusText.Text = e.IsSuccess
-                    ? "Connected to InnAware Support"
-                    : $"Navigation error: {e.WebErrorStatus}";
+                    ? $"Connected to InnAware Support · {TechnicianBuildInfo.InformationalVersion}"
+                    : $"Navigation error: {e.WebErrorStatus} · {TechnicianBuildInfo.InformationalVersion}";
 
                 if (e.IsSuccess)
                 {
