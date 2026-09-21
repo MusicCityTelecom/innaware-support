@@ -77,13 +77,49 @@ A historical or live session can be opened to review:
 - current status;
 - technician;
 - customer machine;
+- customer agent version/build when known;
 - requested permissions;
 - created/connected/ended timestamps;
 - calculated duration;
 - event timeline;
-- technician notes.
+- technician notes;
+- persisted network diagnostics;
+- chat history and image attachments while their temporary transfer is available.
 
 Ended and expired sessions open in review mode. Active sessions additionally open the WebSocket remote viewer.
+
+### Live support workspace
+
+The active viewer supports:
+
+- individual-monitor selection and a composite **All monitors** virtual desktop when the customer has multiple displays;
+- automatic DXGI capture with GDI compatibility fallback;
+- JPEG or negotiated H.264 video transport where supported;
+- 100%, 75%, and 50% transport resolution;
+- JPEG quality and fixed/adaptive frame-rate control;
+- Fit, 1:1, browser fullscreen, and detachable/pop-out viewing;
+- keyboard/mouse control;
+- text clipboard send/get;
+- technician-to-customer and customer-to-technician files;
+- text chat and inline picture chat;
+- local technician-side WebM recording;
+- network diagnostics plus live refresh;
+- customer-approved on-demand elevation.
+
+The customer can terminate the session at any time. An elevation request never bypasses UAC.
+
+### Native technician client
+
+Authenticated technicians can download either:
+
+- `InnAware-Support-Technician-Portable.zip`; or
+- `InnAware-Support-Technician-Setup.exe`.
+
+The native Windows client embeds the same web application with WebView2 and therefore uses the same authentication, RBAC, API, cookies, and live-session mechanisms.
+
+Its native toolbar mirrors the viewer controls, including monitor, capture backend, video transport, resolution, quality, FPS, detach, Fit/1:1, recording, chat, files, network tools, elevation, fullscreen, and always-on-top.
+
+The custom `innaware-support-tech://` protocol lets the browser hand an active session to the installed technician application.
 
 ### Team
 
@@ -110,7 +146,10 @@ The operations-console upgrade adds these objects without deleting existing supp
 - `support_admins`;
 - `support_admin_audit`;
 - `support_session_notes`;
-- nullable `support_sessions.technician_id`.
+- `support_chat_messages`;
+- `support_session_network`;
+- nullable `support_sessions.technician_id`;
+- session permission columns for clipboard and file transfer.
 
 Existing `technician_name` values remain in place for historical readability.
 
