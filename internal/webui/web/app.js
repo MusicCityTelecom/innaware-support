@@ -717,6 +717,10 @@ async function updateVideoCodecCapability(msg){
   const requested=msg.video_transport==='h264-annexb'&&eligible
     ? 'h264-annexb'
     : 'jpeg';
+
+  if(msg.h264_last_error && el){
+    el.textContent += ' · previous agent fallback: '+String(msg.h264_last_error);
+  }
   state.videoTransport=requested;
   $('videoTransportSelect').value=requested;
 
@@ -757,6 +761,14 @@ function applyCaptureSettingsAck(msg){
 
   $('viewerCaptureState').textContent=
     `Monitor ${state.activeMonitor+1} · ${$('captureModeSelect').value==='gdi'?'GDI compatibility':'Auto capture'} · ${$('scaleSelect').value}% · ${videoLabel} · ${fpsLabel}`;
+
+  if(msg.h264_error){
+    const codec=$('viewerCodecCapability');
+    if(codec){
+      codec.textContent=
+        `${codec.textContent.split(' · agent fallback:')[0]} · agent fallback: ${String(msg.h264_error)}`;
+    }
+  }
 }
 
 function applyCaptureTelemetry(msg){
@@ -939,6 +951,7 @@ async function decodeH264Packet(buffer){
 }
 
 function fallbackToJpeg(reason){
+  console.warn('InnAware H.264 fallback:',reason);
   resetH264Decoder();
   state.videoTransport='jpeg';
   $('videoTransportSelect').value='jpeg';
