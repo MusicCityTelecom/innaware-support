@@ -5,54 +5,174 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            kind: server
-          - os: windows-latest
-            kind: agent
-    runs-on: ${{ matrix.os }}
+  server:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - if: matrix.kind == 'server'
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-      - if: matrix.kind == 'server'
+          cache: true
+      - name: Test and build server
         run: |
           go mod download
           go test ./...
+          go vet ./...
           mkdir -p dist
           go build -trimpath -ldflags='-s -w' -o dist/innaware-support-server-linux-amd64 ./cmd/server
-      - if: matrix.kind == 'agent'
-        uses: actions/setup-dotnet@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-server
+          path: dist/innaware-support-server-linux-amd64
+
+  customer-agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - if: matrix.kind == 'agent'
+      - name: Publish customer agent
         shell: pwsh
         run: |
           dotnet restore agent/InnAwareSupport.Agent.csproj
-          dotnet publish agent/InnAwareSupport.Agent.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist/agent
-          Copy-Item dist/agent/InnAwareSupport.exe dist/InnAware-Remote-Support-Windows-x64.exe
+          dotnet publish agent/InnAwareSupport.Agent.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -o dist/agent
+          Copy-Item dist/agent/InnAwareSupport.exe dist/InnAware-Remote-Support.exe
+          Get-FileHash dist/InnAware-Remote-Support.exe -Algorithm SHA256 | Format-List
+      - name: Verify customer executable identity
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path 'dist/InnAware-Remote-Support.exe'
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          Write-Host "ProductName: $($info.ProductName)"
+          Write-Host "CompanyName: $($info.CompanyName)"
+          Write-Host "FileVersion: $($info.FileVersion)"
+          if ($info.ProductName -ne 'InnAware Remote Support') {
+            throw "Unexpected customer ProductName: $($info.ProductName)"
+          }
+          if ($info.CompanyName -ne 'InnAware') {
+            throw "Unexpected customer CompanyName: $($info.CompanyName)"
+          }
+          $signature = Get-AuthenticodeSignature $exe
+          Write-Host "Authenticode: $($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "Signer subject: $($signature.SignerCertificate.Subject)"
+          } else {
+            Write-Host "Signer subject: (not signed yet)"
+          }
       - uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.kind }}
-          path: dist/*
+          name: release-customer-agent
+          path: dist/InnAware-Remote-Support.exe
+
+  technician:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish technician client
+        shell: pwsh
+        run: |
+          dotnet restore technician/InnAwareSupport.Technician.csproj
+          dotnet publish technician/InnAwareSupport.Technician.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -o dist/technician
+          $exe = 'dist/technician/InnAwareSupportTechnician.exe'
+          if (-not (Test-Path $exe)) { throw "Technician executable was not published." }
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path $exe))
+          Write-Host "ProductName: $($info.ProductName)"
+          Write-Host "CompanyName: $($info.CompanyName)"
+          Write-Host "FileVersion: $($info.FileVersion)"
+          if ($info.ProductName -ne 'InnAware Support Technician') {
+            throw "Unexpected technician ProductName: $($info.ProductName)"
+          }
+          if ($info.CompanyName -ne 'InnAware') {
+            throw "Unexpected technician CompanyName: $($info.CompanyName)"
+          }
+          $signature = Get-AuthenticodeSignature $exe
+          Write-Host "Authenticode: $($signature.Status)"
+          if ($signature.SignerCertificate) {
+            Write-Host "Signer subject: $($signature.SignerCertificate.Subject)"
+          } else {
+            Write-Host "Signer subject: (not signed yet)"
+          }
+
+      - name: Build technician portable ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path dist/technician/* `
+            -DestinationPath dist/InnAware-Support-Technician-Portable.zip `
+            -Force
+          Get-FileHash dist/InnAware-Support-Technician-Portable.zip -Algorithm SHA256 | Format-List
+
+      - name: Build technician installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found." }
+
+          New-Item -ItemType Directory -Force -Path dist/installer | Out-Null
+          $publish = (Resolve-Path dist/technician).Path
+          $output = (Resolve-Path dist/installer).Path
+
+          & $iscc `
+            "/DPublishDir=$publish" `
+            "/DOutputDir=$output" `
+            technician/installer.iss
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit $LASTEXITCODE"
+          }
+
+          $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
+          if (-not (Test-Path $installer)) { throw "Technician installer was not created." }
+          Copy-Item $installer dist/InnAware-Support-Technician-Setup.exe -Force
+          Get-FileHash dist/InnAware-Support-Technician-Setup.exe -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-technician
+          path: |
+            dist/InnAware-Support-Technician-Portable.zip
+            dist/InnAware-Support-Technician-Setup.exe
 
   release:
-    needs: build
+    needs: [server, customer-agent, technician]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           merge-multiple: true
           path: release
+
+      - name: Generate SHA-256 manifest
+        run: |
+          cd release
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\n' | sort | while read -r file; do
+            sha256sum "$file"
+          done > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
