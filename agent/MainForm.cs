@@ -2069,8 +2069,12 @@ internal sealed class MainForm : Form
         var viewer = Volatile.Read(ref _viewerConnected) == 1 ? "Viewer attached" : "Waiting for viewer";
         var backend = Volatile.Read(ref _captureBackend);
         var transport = Volatile.Read(ref _videoTransport) == "h264-annexb" ? "H.264" : "JPEG";
+        var monitorIndex = Volatile.Read(ref _monitorIndex);
+        var monitorLabel = monitorIndex == ScreenCapture.AllMonitorsIndex
+            ? "All monitors"
+            : $"Monitor {monitorIndex + 1}";
         _detail.Text =
-            $"Server: {_options.Server} · {backend} · {transport} · Monitor {Volatile.Read(ref _monitorIndex) + 1} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · {viewer}{expires}";
+            $"Server: {_options.Server} · {backend} · {transport} · {monitorLabel} · {Volatile.Read(ref _scalePercent)}% · {Volatile.Read(ref _fps)} FPS · {viewer}{expires}";
     }
 
     private void ToggleEntry(bool enabled)
