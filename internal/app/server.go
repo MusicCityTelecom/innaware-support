@@ -911,6 +911,26 @@ func (s *Server) handleTechWS(w http.ResponseWriter, r *http.Request) {
 			_ = s.hub.sendToAgent(id, websocket.TextMessage, data)
 			continue
 		}
+		if envelope.Type == "screenshot_status" {
+			var payload struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(data, &payload) != nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(payload.Status)) != "saved" {
+				continue
+			}
+			admin := currentAdmin(r.Context())
+			s.store.AddEvent(
+				r.Context(),
+				id,
+				admin.Username,
+				"screenshot_saved",
+				"technician saved remote screenshot locally",
+			)
+			continue
+		}
 	}
 }
 
