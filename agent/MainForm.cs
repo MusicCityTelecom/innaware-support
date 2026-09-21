@@ -380,6 +380,8 @@ internal sealed class MainForm : Form
         {
             type = "hello",
             machine_name = Environment.MachineName,
+            agent_version = AgentBuildInfo.Version,
+            agent_build = AgentBuildInfo.InformationalVersion,
             elevated = Program.IsAdministrator(),
             control = _requestedControl,
             clipboard = _requestedClipboard,
