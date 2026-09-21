@@ -166,12 +166,25 @@ internal sealed class TechnicianForm : Form
             await ClickWebButtonAsync("actualViewButton"));
         AddButton("Record", async (_, _) =>
             await ClickWebButtonAsync("recordViewerButton"));
+        AddButton("Screenshot", async (_, _) =>
+            await ClickWebButtonAsync("screenshotViewerButton"));
+        AddButton("Tools", async (_, _) =>
+            await ClickWebButtonAsync("toggleSidebarButton"));
         AddButton("Chat", async (_, _) =>
-            await FocusWebElementAsync("chatBody"));
+        {
+            await EnsureViewerSidebarVisibleAsync();
+            await FocusWebElementAsync("chatBody");
+        });
         AddButton("Files", async (_, _) =>
-            await ScrollWebElementAsync("fileTransferCard"));
+        {
+            await EnsureViewerSidebarVisibleAsync();
+            await ScrollWebElementAsync("fileTransferCard");
+        });
         AddButton("Network", async (_, _) =>
-            await ScrollWebElementAsync("networkCard"));
+        {
+            await EnsureViewerSidebarVisibleAsync();
+            await ScrollWebElementAsync("networkCard");
+        });
         AddButton("Refresh Net", async (_, _) =>
             await ClickWebButtonAsync("refreshNetworkButton"));
         AddButton("Elevate", async (_, _) =>
@@ -517,6 +530,16 @@ internal sealed class TechnicianForm : Form
             e.Cancel = true;
             e.Handled = true;
         }
+    }
+
+    private async Task EnsureViewerSidebarVisibleAsync()
+    {
+        await ExecuteScriptAsync(
+            "(()=>{const v=document.getElementById('viewerView');" +
+            "if(!v||!v.classList.contains('sidebar-hidden'))return true;" +
+            "document.getElementById('toggleSidebarButton')?.click();" +
+            "return true;})();");
+        await Task.Delay(50);
     }
 
     private Task ClickWebButtonAsync(string id) =>
