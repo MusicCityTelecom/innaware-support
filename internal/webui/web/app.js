@@ -11,7 +11,7 @@ const state = {
   h264BrowserConfigKey: '',
   h264AgentEligible: false, h264DecodeStarts: new Map(),
   videoTransport: 'jpeg',
-  viewMode: 'fit', remoteClipboard: '',
+  viewMode: 'fit', sidebarHidden: false, remoteClipboard: '',
   network: null, chatMessages: [],
   recorder: null, recorderChunks: [], recorderStartedAt: null, recorderDownload: true,
   historyOffset: 0, historyLimit: 50, historyTotal: 0
@@ -350,6 +350,7 @@ async function openViewer(id) {
     const popout = new URLSearchParams(location.search).get('popout') === '1';
     document.body.classList.toggle('popout-mode', popout);
     $('backButton').textContent = popout ? 'Close viewer' : '← Back';
+    setViewerSidebarHidden(popout);
     show('recordViewerButton', active);
     show('requestElevationButton', active);
     show('openTechnicianAppButton', active);
@@ -385,6 +386,7 @@ function closeViewer(){
   state.remoteClipboard='';
   state.network=null;
   state.chatMessages=[];
+  setViewerSidebarHidden(false);
   if(popout){
     window.close();
     return;
@@ -1243,6 +1245,49 @@ $('requestElevationButton').addEventListener('click',()=>{
     alert(e.message);
   }
 });
+
+function setViewerSidebarHidden(hidden){
+  state.sidebarHidden=!!hidden;
+  const viewer=$('viewerView');
+  if(viewer)viewer.classList.toggle('sidebar-hidden',state.sidebarHidden);
+  const button=$('toggleSidebarButton');
+  if(button)button.textContent=state.sidebarHidden?'Show tools':'Hide tools';
+}
+
+$('toggleSidebarButton').addEventListener('click',()=>{
+  setViewerSidebarHidden(!state.sidebarHidden);
+});
+
+function saveViewerScreenshot(){
+  const canvas=$('remoteCanvas');
+  if(!canvas||canvas.width<1||canvas.height<1||canvas.style.display==='none'){
+    alert('No remote screen frame is available yet.');
+    return;
+  }
+
+  canvas.toBlob(blob=>{
+    if(!blob){
+      alert('Could not create screenshot.');
+      return;
+    }
+
+    const label=(state.session?.customer_label||'session')
+      .replace(/[^a-z0-9_-]+/gi,'-')
+      .replace(/^-+|-+$/g,'')||'session';
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+    const link=document.createElement('a');
+    link.href=URL.createObjectURL(blob);
+    link.download=`InnAware-${label}-${stamp}.png`;
+    link.click();
+    setTimeout(()=>URL.revokeObjectURL(link.href),30000);
+
+    try{
+      sendViewerMessage({type:'screenshot_status',status:'saved'});
+    }catch{}
+  },'image/png');
+}
+
+$('screenshotViewerButton').addEventListener('click',saveViewerScreenshot);
 
 $('recordViewerButton').addEventListener('click',()=>{
   if(state.recorder)stopViewerRecording(true);
