@@ -8,6 +8,7 @@ const state = {
   renderWindowStart: 0, renderCount: 0, renderDropped: 0, renderDecodeMs: 0,
   frameDecodeBusy: false, pendingFrame: null,
   h264Decoder: null, h264BrowserSupported: false,
+  h264BrowserConfigKey: '',
   h264AgentEligible: false, h264DecodeStarts: new Map(),
   videoTransport: 'jpeg',
   viewMode: 'fit', remoteClipboard: '',
@@ -592,6 +593,13 @@ function applyAgentHello(msg){
     option.value='0';option.textContent='Monitor 1';
     select.appendChild(option);
   }else{
+    if(state.monitors.length>1){
+      const all=monitorGeometry(-2);
+      const option=document.createElement('option');
+      option.value='-2';
+      option.textContent=`All monitors · ${all.width}×${all.height}`;
+      select.appendChild(option);
+    }
     for(const m of state.monitors){
       const option=document.createElement('option');
       option.value=String(m.index);
@@ -620,19 +628,42 @@ function applyAgentHello(msg){
   void updateVideoCodecCapability(msg);
 }
 
+function monitorGeometry(index=state.activeMonitor){
+  if(index===-2 && state.monitors.length){
+    const left=Math.min(...state.monitors.map(m=>Number(m.left)||0));
+    const top=Math.min(...state.monitors.map(m=>Number(m.top)||0));
+    const right=Math.max(...state.monitors.map(m=>(Number(m.left)||0)+(Number(m.width)||0)));
+    const bottom=Math.max(...state.monitors.map(m=>(Number(m.top)||0)+(Number(m.height)||0)));
+    return {
+      left,
+      top,
+      width:Math.max(1,right-left),
+      height:Math.max(1,bottom-top)
+    };
+  }
+
+  return state.monitors.find(m=>Number(m.index)===Number(index))
+    || state.monitors[0]
+    || {left:0,top:0,width:1280,height:720};
+}
+
 async function probeBrowserH264Support(){
-  if(state.h264BrowserSupported)return true;
   if(typeof VideoDecoder==='undefined' ||
      typeof VideoDecoder.isConfigSupported!=='function')
     return false;
 
+  const monitor=monitorGeometry(state.activeMonitor);
+  const scale=Math.max(0.5,Math.min(1,Number($('scaleSelect')?.value||100)/100));
+  const width=Math.max(2,Math.floor((Number(monitor.width)||1280)*scale)&~1);
+  const height=Math.max(2,Math.floor((Number(monitor.height)||720)*scale)&~1);
+  const configKey=`${width}x${height}`;
+
+  if(state.h264BrowserConfigKey===configKey)
+    return state.h264BrowserSupported;
+
   try{
-    const monitor=(state.monitors||[])[state.activeMonitor]||{};
-    const scale=Math.max(0.5,Math.min(1,Number($('scaleSelect')?.value||100)/100));
-    const width=Math.max(2,Math.floor((Number(monitor.width)||1280)*scale)&~1);
-    const height=Math.max(2,Math.floor((Number(monitor.height)||720)*scale)&~1);
     const support=await VideoDecoder.isConfigSupported({
-      codec:'avc1.42E028',
+      codec:'avc1.42E033',
       codedWidth:width,
       codedHeight:height,
       hardwareAcceleration:'no-preference',
@@ -643,6 +674,7 @@ async function probeBrowserH264Support(){
     state.h264BrowserSupported=false;
   }
 
+  state.h264BrowserConfigKey=configKey;
   return state.h264BrowserSupported;
 }
 
@@ -774,6 +806,7 @@ function resetCaptureTelemetry(){
   state.renderWindowStart=now;state.renderCount=0;state.renderDropped=0;state.renderDecodeMs=0;
   state.frameDecodeBusy=false;state.pendingFrame=null;
   state.h264BrowserSupported=false;
+  state.h264BrowserConfigKey='';
   state.h264AgentEligible=false;
   state.videoTransport='jpeg';
   resetH264Decoder();
@@ -852,7 +885,7 @@ async function ensureH264Decoder(){
 
   try{
     decoder.configure({
-      codec:'avc1.42E028',
+      codec:'avc1.42E033',
       hardwareAcceleration:'no-preference',
       optimizeForLatency:true
     });
@@ -1007,13 +1040,33 @@ function updateViewerFrameTelemetry(){
   state.renderDecodeMs=0;
 }
 
-$('monitorSelect').addEventListener('change',sendCaptureSettings);
+async function applyGeometrySettingChange(){
+  state.h264BrowserConfigKey='';
+  const supported=await probeBrowserH264Support();
+
+  if(state.ws&&state.ws.readyState===WebSocket.OPEN){
+    state.ws.send(JSON.stringify({
+      type:'viewer_capabilities',
+      h264_webcodecs:supported
+    }));
+  }
+
+  if(!supported && $('videoTransportSelect').value==='h264-annexb'){
+    state.videoTransport='jpeg';
+    $('videoTransportSelect').value='jpeg';
+    resetH264Decoder();
+  }
+
+  sendCaptureSettings();
+}
+
+$('monitorSelect').addEventListener('change',()=>{void applyGeometrySettingChange();});
 $('captureModeSelect').addEventListener('change',sendCaptureSettings);
 $('videoTransportSelect').addEventListener('change',()=>{
   if($('videoTransportSelect').value==='h264-annexb')resetH264Decoder();
   sendCaptureSettings();
 });
-$('scaleSelect').addEventListener('change',sendCaptureSettings);
+$('scaleSelect').addEventListener('change',()=>{void applyGeometrySettingChange();});
 $('qualitySelect').addEventListener('change',sendCaptureSettings);
 $('fpsSelect').addEventListener('change',sendCaptureSettings);
 
