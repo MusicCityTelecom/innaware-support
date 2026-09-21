@@ -41,7 +41,8 @@ All live customer connections remain outbound from the customer network. The VPS
 The browser console provides:
 
 - live session creation and review;
-- detachable/pop-out remote viewer;
+- detachable/pop-out remote viewer with a screen-focused mode;
+- local PNG screenshots of the currently rendered remote canvas;
 - Fit, 1:1, and fullscreen viewing;
 - monitor selection, including a composite **All monitors** virtual desktop;
 - capture backend, resolution, JPEG quality, frame-rate, and video-transport controls;
@@ -58,7 +59,7 @@ The browser console provides:
 
 The Windows technician application is a .NET 8 WinForms/WebView2 shell around the same authenticated web application. It therefore uses the same server-side account, cookie, RBAC, session, audit, and WebSocket mechanisms instead of introducing a second authentication system.
 
-The native toolbar mirrors the live viewer controls and provides monitor selection, capture/video controls, resolution/quality/FPS, detach, Fit/1:1, recording, chat, files, network tools, elevation request, native fullscreen, and always-on-top behavior.
+The native toolbar mirrors the live viewer controls and provides monitor selection, capture/video controls, resolution/quality/FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network tools, elevation request, native fullscreen, and always-on-top behavior.
 
 It is built as both a portable ZIP and an Inno Setup installer.
 
@@ -146,7 +147,7 @@ The snapshot is persisted per support session and technicians can request a live
 
 ## Recording
 
-Technician-side recording currently records the rendered remote canvas locally as WebM and downloads it to the technician workstation. The VPS does not intentionally retain screen video.
+Technician-side recording currently records the rendered remote canvas locally as WebM and downloads it to the technician workstation. One-click screenshots similarly save the rendered canvas locally as PNG; only the screenshot event is written to the session timeline. The VPS does not intentionally retain screen video or screenshot image bytes.
 
 Server-managed recording retention, policy controls, and evidence storage are future work.
 

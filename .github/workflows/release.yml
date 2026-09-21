@@ -61,6 +61,9 @@ jobs:
           if ($info.CompanyName -ne 'InnAware') {
             throw "Unexpected customer CompanyName: $($info.CompanyName)"
           }
+          if ($info.FileVersion -ne '0.9.0.0') {
+            throw "Unexpected customer FileVersion: $($info.FileVersion)"
+          }
           $signature = Get-AuthenticodeSignature $exe
           Write-Host "Authenticode: $($signature.Status)"
           if ($signature.SignerCertificate) {
@@ -100,6 +103,9 @@ jobs:
           }
           if ($info.CompanyName -ne 'InnAware') {
             throw "Unexpected technician CompanyName: $($info.CompanyName)"
+          }
+          if ($info.FileVersion -ne '0.9.0.0') {
+            throw "Unexpected technician FileVersion: $($info.FileVersion)"
           }
           $signature = Get-AuthenticodeSignature $exe
           Write-Host "Authenticode: $($signature.Status)"
@@ -141,6 +147,10 @@ jobs:
             throw "Inno Setup failed with exit $LASTEXITCODE"
           }
 
+          $installerSource = Get-Content technician/installer.iss -Raw
+          if ($installerSource -notmatch '#define MyAppVersion "0\.9\.0-preview"') {
+            throw "Technician installer AppVersion is not 0.9.0-preview."
+          }
           $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
           if (-not (Test-Path $installer)) { throw "Technician installer was not created." }
           Copy-Item $installer dist/InnAware-Support-Technician-Setup.exe -Force
