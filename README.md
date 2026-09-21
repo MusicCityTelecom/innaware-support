@@ -56,7 +56,7 @@ The first milestone relays all frames through the VPS for predictable NAT/CGNAT 
 - customer and technician Windows releases are not Authenticode-signed yet; Azure Artifact Signing setup is planned;
 - technician-side recording is currently local WebM canvas recording rather than centrally retained server recording.
 
-These are deliberate boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md).
+These are deliberate boundaries. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/OPERATIONS.md](docs/OPERATIONS.md), and [docs/SECURITY.md](docs/SECURITY.md). Before widening field use, run the [beta acceptance checklist](docs/ACCEPTANCE-TEST.md).
 
 ## VPS deployment
 
