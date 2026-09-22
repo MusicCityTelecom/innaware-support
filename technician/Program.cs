@@ -9,6 +9,22 @@ internal static class Program
     private static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        AppDiagnostics.Initialize();
+
+        Application.ThreadException += (_, e) =>
+            AppDiagnostics.Log("ui_thread_exception", e.Exception);
+
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            AppDiagnostics.Log(
+                "appdomain_unhandled_exception terminating=" + e.IsTerminating,
+                e.ExceptionObject as Exception);
+
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            AppDiagnostics.Log("unobserved_task_exception", e.Exception);
+            e.SetObserved();
+        };
 
         var server = DefaultServer;
         string? startUrl = null;
@@ -30,7 +46,9 @@ internal static class Program
             startUrl = ResolveDeepLink(server, deepLink);
 
         startUrl = EnsureNativeMode(server, startUrl);
+        AppDiagnostics.Log("launch server=" + server);
         Application.Run(new TechnicianForm(server, startUrl));
+        AppDiagnostics.Log("application_exit");
     }
 
     private static string? ResolveDeepLink(string server, string value)
