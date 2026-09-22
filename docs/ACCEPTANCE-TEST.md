@@ -35,8 +35,8 @@ Use either the portable ZIP or installer from the authenticated console/release.
 Verify:
 
 - product is **InnAware Support Technician**;
-- FileVersion is **0.10.0.0**;
-- the installer reports **0.10.0-preview**;
+- FileVersion is **0.10.1.0**;
+- the installer reports **0.10.1-preview**;
 - the `innaware-support-tech://` browser handoff opens the installed technician client;
 - login uses the existing support account and no second credential system appears;
 - the native toolbar exposes monitor, capture, transport, resolution, quality, FPS, detach, Fit/1:1, Screenshot, Tools, Record, Chat, Files, Network, Elevate, fullscreen, and always-on-top controls.
@@ -51,7 +51,7 @@ Download a fresh customer executable from:
 https://remote.innawareucp.com/download/windows
 ```
 
-Verify its Windows FileVersion is **0.10.0.0**.
+Verify its Windows FileVersion is **0.10.1.0**.
 
 Create an attended session and confirm:
 
