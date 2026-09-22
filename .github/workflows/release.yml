@@ -148,7 +148,7 @@ jobs:
           }
 
           $installerSource = Get-Content technician/installer.iss -Raw
-          if ($installerSource -notmatch '#define MyAppVersion "0\.10\.0-preview"') {
+          if ($installerSource -notmatch '#define MyAppVersion "0\.10\.1-preview"') {
             throw "Technician installer AppVersion is not 0.10.1-preview."
           }
           $installer = 'dist/installer/InnAware-Support-Technician-Setup.exe'
