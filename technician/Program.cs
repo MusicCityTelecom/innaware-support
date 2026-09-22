@@ -29,6 +29,7 @@ internal static class Program
         if (!string.IsNullOrWhiteSpace(deepLink))
             startUrl = ResolveDeepLink(server, deepLink);
 
+        startUrl = EnsureNativeMode(server, startUrl);
         Application.Run(new TechnicianForm(server, startUrl));
     }
 
@@ -52,8 +53,28 @@ internal static class Program
             return null;
 
         return server.TrimEnd('/') +
-               "/?viewer=" +
-               Uri.EscapeDataString(sessionId.ToString()) +
-               "&popout=1";
+               "/?native=1&viewer=" +
+               Uri.EscapeDataString(sessionId.ToString());
+    }
+
+    private static string EnsureNativeMode(string server, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return server.TrimEnd('/') + "/?native=1";
+
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            return server.TrimEnd('/') + "/?native=1";
+
+        var builder = new UriBuilder(uri);
+        var query = builder.Query.TrimStart('?');
+        if (!query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Any(x => x.StartsWith("native=", StringComparison.OrdinalIgnoreCase)))
+        {
+            builder.Query = string.IsNullOrWhiteSpace(query)
+                ? "native=1"
+                : query + "&native=1";
+        }
+
+        return builder.Uri.ToString();
     }
 }
