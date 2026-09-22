@@ -1115,6 +1115,7 @@ internal sealed class TechnicianForm : Form
             WindowState = FormWindowState.Normal;
             Bounds = Screen.FromControl(this).Bounds;
             _nav.Visible = false;
+            _root.ColumnStyles[0].Width = 0;
             _header.Visible = false;
             _status.Visible = false;
             _main.RowStyles[0].Height = 0;
@@ -1123,6 +1124,7 @@ internal sealed class TechnicianForm : Form
         }
         else
         {
+            _root.ColumnStyles[0].Width = 205;
             _nav.Visible = true;
             _header.Visible = true;
             _status.Visible = true;
