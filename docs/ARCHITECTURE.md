@@ -57,9 +57,9 @@ The browser console provides:
 
 ### Native technician client
 
-The Windows technician application is a .NET 8 WinForms/WebView2 shell around the same authenticated web application. It therefore uses the same server-side account, cookie, RBAC, session, audit, and WebSocket mechanisms instead of introducing a second authentication system.
+The Windows technician application is a .NET 8 WinForms/WebView2 native shell over the same authenticated support application. Website login/cookies, server-side RBAC, sessions, audit, and WebSocket mechanisms remain authoritative, but native mode suppresses duplicated browser chrome and exposes first-class Windows navigation, session actions, viewer controls, and status/telemetry surfaces.
 
-The native toolbar mirrors the live viewer controls and provides monitor selection, capture/video controls, resolution/quality/FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network tools, elevation request, native fullscreen, and always-on-top behavior.
+The native application provides a left navigation rail for Live Sessions, History, Team, Audit, Account, and Sign out; a native session header; and a session-only viewer toolbar for monitor selection, capture/video controls, resolution/quality/FPS, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, clipboard, network tools, elevation request, native fullscreen, and always-on-top behavior.
 
 It is built as both a portable ZIP and an Inno Setup installer.
 
