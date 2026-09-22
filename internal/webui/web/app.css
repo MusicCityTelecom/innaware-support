@@ -17,3 +17,42 @@ body.popout-mode .viewer-controls{position:sticky;top:58px;z-index:19}
   .viewer-head{flex-wrap:wrap}
   body.popout-mode .viewer-grid{grid-template-columns:1fr}
 }
+
+
+/* Native Windows technician shell: keep web auth/session logic, remove duplicated browser chrome. */
+body.native-app{background:#f4f7fb}
+body.native-app .shell{width:100%;max-width:none;padding:0 18px;min-height:100vh}
+body.native-app .topbar,
+body.native-app footer,
+body.native-app #publicView,
+body.native-app .console-head,
+body.native-app .console-tabs,
+body.native-app .viewer-head,
+body.native-app .viewer-controls,
+body.native-app .viewer-foot{display:none!important}
+body.native-app main{padding:18px 0 20px;min-height:100vh}
+body.native-app #consoleView{max-width:1500px;margin:0 auto}
+body.native-app .tab-panel{min-height:0}
+body.native-app .metrics{margin-bottom:18px}
+body.native-app .metrics>div{box-shadow:none}
+body.native-app .section-head{margin-top:0}
+body.native-app .sessions-list,
+body.native-app .sidebar-card,
+body.native-app .admin-row,
+body.native-app .audit-row{box-shadow:0 6px 22px rgba(22,42,72,.055)}
+body.native-app .viewer{gap:0}
+body.native-app .viewer-grid{grid-template-columns:minmax(0,1fr) minmax(320px,390px);gap:12px;align-items:stretch}
+body.native-app .screen-wrap{min-height:calc(100vh - 42px);height:calc(100vh - 42px);border-radius:10px;box-shadow:none}
+body.native-app .screen-wrap.fit-mode #remoteCanvas{max-height:calc(100vh - 42px)}
+body.native-app .session-sidebar{max-height:calc(100vh - 42px);padding-right:2px}
+body.native-app .viewer.sidebar-hidden .screen-wrap{min-height:calc(100vh - 42px);height:calc(100vh - 42px)}
+body.native-app .login-panel{width:min(820px,calc(100vw - 70px));margin:8vh auto 0;border-radius:18px;box-shadow:0 18px 55px rgba(20,45,75,.10);overflow:hidden;gap:36px}
+body.native-app .login-panel>div:first-child{background:linear-gradient(145deg,#12243d,#173961);color:#fff;margin:-28px 0 -28px -28px;padding:52px 38px;display:flex;flex-direction:column;justify-content:center}
+body.native-app .login-panel>div:first-child .eyebrow{color:#8fb7ff}
+body.native-app .login-panel>div:first-child p:not(.eyebrow){color:#c8d5e6}
+body.native-app .login-panel form{padding:10px 8px 4px 0;display:flex;flex-direction:column;justify-content:center}
+body.native-app dialog{box-shadow:0 24px 80px rgba(12,28,50,.24)}
+@media(max-width:1000px){
+  body.native-app .viewer-grid{grid-template-columns:1fr}
+  body.native-app .session-sidebar{max-height:none}
+}

@@ -116,9 +116,9 @@ Authenticated technicians can download either:
 - `InnAware-Support-Technician-Portable.zip`; or
 - `InnAware-Support-Technician-Setup.exe`.
 
-The native Windows client embeds the same web application with WebView2 and therefore uses the same authentication, RBAC, API, cookies, and live-session mechanisms.
+The native Windows client uses WebView2 for the authenticated support content but presents it through a dedicated WinForms shell. The same website login, cookies, RBAC, API, and live-session mechanisms remain in use, so technicians do not have a second password store or authentication flow.
 
-Its native toolbar mirrors the viewer controls, including monitor, capture backend, video transport, resolution, quality, FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network tools, elevation, fullscreen, and always-on-top.
+The native shell provides app navigation, a session header, a status/telemetry strip, and a viewer toolbar with monitor, capture backend, video transport, resolution, quality, FPS, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, clipboard, network tools, elevation, fullscreen, and always-on-top. Native mode hides the redundant web header, tabs, and viewer-control bars.
 
 The custom `innaware-support-tech://` protocol lets the browser hand an active session to the installed technician application.
 
