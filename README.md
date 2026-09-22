@@ -39,7 +39,7 @@ The short code is **not** the live remote-control key. It is single-use enrollme
 
 - **Go server/broker** — HTTPS API behind Apache, technician sessions, short-code enrollment, MySQL persistence, WebSocket relay.
 - **Technician web console** — live sessions, searchable history, metrics, notes/timeline, CSV export, remote viewer/control, detachable focused viewer, local PNG screenshots, recording, chat/image chat, file/clipboard tools, network diagnostics, on-demand elevation request, team management, and administrative audit.
-- **Native Windows technician app** — .NET 8/WebView2 client using the same web authentication/session mechanism, packaged as both a portable ZIP and Windows installer. Its native overlay exposes monitor selection, capture mode, video transport, resolution, quality, FPS, detach, Fit/1:1, screenshot, tools/sidebar control, recording, chat, files, network refresh, elevation, fullscreen, and always-on-top controls.
+- **Native Windows technician app** — .NET 8 WinForms/WebView2 application that keeps the same website authentication, cookies, RBAC, and session APIs while presenting them through a native shell. The app has its own navigation rail, session header, viewer toolbar, status/telemetry strip, monitor/video/capture controls, screenshot/recording/chat/file/clipboard/network/elevation actions, fullscreen, and always-on-top behavior. In native mode the embedded page suppresses duplicated browser headers and viewer controls.
 - **Windows customer agent** — .NET 8 WinForms single-file executable with explicit terms/consent, DXGI/GDI screen capture, cursor capture, keyboard/mouse input, chat/image chat, file transfer, clipboard, network diagnostics, reconnect/revocation, and customer-approved on-demand UAC elevation restart.
 - **Apache deployment** — existing TLS termination on `remote.innawareucp.com`; Go service stays on `127.0.0.1:8787`.
 - **MySQL/MariaDB** — sessions and audit events. Live screen frames are not intentionally persisted.
@@ -109,7 +109,7 @@ sudo bash deploy/update-vps.sh
 
 ## Build the Windows agent
 
-GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`. The current beta identity is `0.9.0-preview`.
+GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`. The current beta identity is `0.10.0-preview`.
 
 Published Windows artifacts:
 
