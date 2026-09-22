@@ -1,5 +1,32 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
+const nativeApp = new URLSearchParams(location.search).get('native') === '1' &&
+  !!window.chrome?.webview;
+document.body.classList.toggle('native-app', nativeApp);
+
+function nativeNotify(type, payload = {}) {
+  if (!nativeApp) return;
+  try {
+    window.chrome.webview.postMessage({ type, ...payload });
+  } catch {}
+}
+
+function nativeViewerSnapshot(extra = {}) {
+  if (!nativeApp) return;
+  nativeNotify('viewer_state', {
+    active: !!state.session,
+    label: state.session?.customer_label || 'Remote session',
+    machine: state.session?.machine_name || '',
+    status: state.session?.status || '',
+    tab: state.activeTab || 'sessions',
+    telemetry: $('viewerTelemetry')?.textContent || '',
+    capture: $('viewerCaptureState')?.textContent || '',
+    codec: $('viewerCodecCapability')?.textContent || '',
+    transport: state.videoTransport || 'jpeg',
+    tools_hidden: !!state.sidebarHidden,
+    ...extra
+  });
+}
 const state = {
   me: null, sessions: [], history: [], admins: [], audit: [],
   ws: null, session: null, activeTab: 'sessions', lastMove: 0,
@@ -48,6 +75,12 @@ function setAuthUI(loggedIn) {
   show('accountButton', loggedIn);
   document.querySelectorAll('.admin-only').forEach(el => el.classList.toggle('hidden', !loggedIn || !isAdmin()));
   $('whoami').textContent = loggedIn ? `${state.me.display_name || state.me.username} · ${state.me.role}` : '';
+  nativeNotify('auth', {
+    logged_in: !!loggedIn,
+    display_name: loggedIn ? (state.me.display_name || state.me.username || '') : '',
+    username: loggedIn ? (state.me.username || '') : '',
+    role: loggedIn ? (state.me.role || '') : ''
+  });
   if (!loggedIn) {
     switchTab('sessions', false);
   }
@@ -150,6 +183,7 @@ document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', (
 async function switchTab(name, load = true) {
   if ((name === 'team' || name === 'audit') && !isAdmin()) name = 'sessions';
   state.activeTab = name;
+  nativeNotify('route', { tab: name, viewer: false });
   document.querySelectorAll('.tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
   for (const tab of ['sessions','history','team','audit']) show(`${tab}Tab`, tab === name);
   if (!load || !state.me) return;
@@ -350,7 +384,8 @@ async function openViewer(id) {
     const popout = new URLSearchParams(location.search).get('popout') === '1';
     document.body.classList.toggle('popout-mode', popout);
     $('backButton').textContent = popout ? 'Close viewer' : '← Back';
-    setViewerSidebarHidden(popout);
+    setViewerSidebarHidden(popout || nativeApp);
+    nativeViewerSnapshot({ active: true, status: state.session.status });
     show('recordViewerButton', active);
     show('requestElevationButton', active);
     show('openTechnicianAppButton', active);
@@ -387,6 +422,7 @@ function closeViewer(){
   state.network=null;
   state.chatMessages=[];
   setViewerSidebarHidden(false);
+  nativeNotify('viewer_state', { active:false, tab:state.activeTab || 'sessions' });
   if(popout){
     window.close();
     return;
@@ -406,6 +442,8 @@ $('endSessionButton').addEventListener('click',async()=>{
 function setViewerStatus(status){
   $('viewerStatus').textContent=status;
   $('viewerStatus').className=`status-dot ${status==='connected'?'connected':''}`;
+  if (state.session) state.session.status = status;
+  nativeViewerSnapshot({ status });
 }
 function renderSessionDetail() {
   const s = state.session;
@@ -769,6 +807,7 @@ function applyCaptureSettingsAck(msg){
         `${codec.textContent.split(' · agent fallback:')[0]} · agent fallback: ${String(msg.h264_error)}`;
     }
   }
+  nativeViewerSnapshot();
 }
 
 function applyCaptureTelemetry(msg){
@@ -781,6 +820,7 @@ function applyCaptureTelemetry(msg){
   const payload=bytes>0?` · ${formatBytes(bytes)}/s encoded`:'';
   $('viewerCaptureState').textContent=
     `${backend} · ${transport} · sent ${sent}/s · skipped ${skipped}/s · ${avg.toFixed(1)} ms avg${payload}`;
+  nativeViewerSnapshot();
 }
 
 function sendCaptureSettings(){
@@ -960,6 +1000,7 @@ function fallbackToJpeg(reason){
     codec.textContent=
       `${codec.textContent.split(' · fallback:')[0]} · fallback: ${reason}`;
   }
+  nativeViewerSnapshot({ warning: reason });
   sendCaptureSettings();
 }
 
@@ -1034,6 +1075,7 @@ function updateViewerFrameTelemetry(){
 
   $('viewerTelemetry').textContent=
     `${renderedFps.toFixed(1)} rendered · ${receivedFps.toFixed(1)} received · ${mbps.toFixed(2)} Mb/s · ${dropped} dropped · ${avgDecode.toFixed(1)} ms decode`;
+  nativeViewerSnapshot();
 
   if(state.ws&&state.ws.readyState===WebSocket.OPEN){
     state.ws.send(JSON.stringify({
@@ -1265,6 +1307,7 @@ function setViewerSidebarHidden(hidden){
   if(viewer)viewer.classList.toggle('sidebar-hidden',state.sidebarHidden);
   const button=$('toggleSidebarButton');
   if(button)button.textContent=state.sidebarHidden?'Show tools':'Hide tools';
+  nativeViewerSnapshot();
 }
 
 $('toggleSidebarButton').addEventListener('click',()=>{
