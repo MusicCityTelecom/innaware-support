@@ -109,7 +109,7 @@ sudo bash deploy/update-vps.sh
 
 ## Build the Windows agent
 
-GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`. The current beta identity is `0.10.0-preview`.
+GitHub Actions builds the Windows x64 customer agent and native technician client on every push to `main`. A successful `main` build refreshes the prerelease tag `mvp-latest`. The current beta identity is `0.10.1-preview`.
 
 Published Windows artifacts:
 

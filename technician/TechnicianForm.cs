@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -35,6 +36,8 @@ internal sealed class TechnicianForm : Form
 
     private readonly ToolStripStatusLabel _statusText = new();
     private readonly ToolStripStatusLabel _telemetryText = new();
+    private readonly ToolStripStatusLabel _versionText = new();
+    private readonly ToolStripStatusLabel _diagnosticsLink = new();
     private readonly ToolStripComboBox _monitor = new();
     private readonly ToolStripComboBox _capture = new();
     private readonly ToolStripComboBox _video = new();
@@ -74,6 +77,7 @@ internal sealed class TechnicianForm : Form
         BackColor = Paper;
         Font = new Font("Segoe UI", 9F);
         KeyPreview = true;
+        WindowPlacementStore.Apply(this);
 
         _sessionsNav = CreateNavButton("Live sessions");
         _historyNav = CreateNavButton("History");
@@ -99,7 +103,17 @@ internal sealed class TechnicianForm : Form
                 await SyncViewerToolbarAsync();
         };
 
-        Shown += async (_, _) => await InitializeBrowserAsync();
+        Shown += async (_, _) =>
+        {
+            AppDiagnostics.Log("technician_window_shown");
+            await InitializeBrowserAsync();
+        };
+        FormClosing += (_, _) =>
+        {
+            if (!_nativeFullscreen)
+                WindowPlacementStore.Save(this);
+            AppDiagnostics.Log("technician_window_closing");
+        };
         KeyDown += HandleShortcut;
     }
 
@@ -172,8 +186,17 @@ internal sealed class TechnicianForm : Form
             AutoSize = true,
             Location = new Point(24, 66)
         };
+        var brandVersion = new Label
+        {
+            Text = "v" + CurrentVersion(),
+            ForeColor = Color.FromArgb(127, 151, 181),
+            Font = new Font("Segoe UI", 7F),
+            AutoSize = true,
+            Location = new Point(24, 85)
+        };
         brand.Controls.Add(brandName);
         brand.Controls.Add(brandSub);
+        brand.Controls.Add(brandVersion);
 
         var stack = new FlowLayoutPanel
         {
@@ -274,8 +297,18 @@ internal sealed class TechnicianForm : Form
         _telemetryText.TextAlign = ContentAlignment.MiddleRight;
         _telemetryText.ForeColor = Muted;
 
+        _versionText.Text = "v" + CurrentVersion();
+        _versionText.ForeColor = Muted;
+
+        _diagnosticsLink.Text = "Open logs";
+        _diagnosticsLink.IsLink = true;
+        _diagnosticsLink.LinkColor = Blue;
+        _diagnosticsLink.Click += (_, _) => AppDiagnostics.OpenLogFolder();
+
         _status.Items.Add(_statusText);
         _status.Items.Add(_telemetryText);
+        _status.Items.Add(_versionText);
+        _status.Items.Add(_diagnosticsLink);
     }
 
     private Button CreateNavButton(string text)
@@ -363,9 +396,9 @@ internal sealed class TechnicianForm : Form
         ConfigureSelector(
             _video,
             "videoTransportSelect",
-            [new("JPEG", "jpeg"), new("H.264", "h264-annexb")],
+            [new("JPEG", "jpeg")],
             "jpeg",
-            70);
+            88);
 
         AddToolLabel("Size");
         ConfigureSelector(
@@ -582,6 +615,10 @@ internal sealed class TechnicianForm : Form
                 _statusText.Text = e.IsSuccess
                     ? "Connected to InnAware Support"
                     : $"Navigation error: {e.WebErrorStatus}";
+                _statusText.ForeColor = e.IsSuccess ? Muted : Color.FromArgb(183, 55, 55);
+
+                if (!e.IsSuccess)
+                    AppDiagnostics.Log("webview_navigation_failed status=" + e.WebErrorStatus);
 
                 if (e.IsSuccess)
                 {
@@ -600,14 +637,28 @@ internal sealed class TechnicianForm : Form
                 Text = "InnAware Support Technician";
             };
             core.WebMessageReceived += WebMessageReceived;
+            core.ProcessFailed += (_, e) =>
+            {
+                var message = "webview_process_failed kind=" + e.ProcessFailedKind;
+                AppDiagnostics.Log(message);
+                if (!IsDisposed)
+                {
+                    BeginInvoke((Action)(() =>
+                    {
+                        _statusText.Text = "WebView2 process failure — see local logs";
+                        _statusText.ForeColor = Color.FromArgb(183, 55, 55);
+                    }));
+                }
+            };
             core.NewWindowRequested += NewWindowRequested;
             core.DownloadStarting += DownloadStarting;
 
             Navigate(_startUrl);
             _syncTimer.Start();
         }
-        catch (WebView2RuntimeNotFoundException)
+        catch (WebView2RuntimeNotFoundException ex)
         {
+            AppDiagnostics.Log("webview_runtime_missing", ex);
             MessageBox.Show(
                 this,
                 "Microsoft Edge WebView2 Runtime is required for InnAware Support Technician. Install the WebView2 Evergreen Runtime and start the application again.",
@@ -618,6 +669,7 @@ internal sealed class TechnicianForm : Form
         }
         catch (Exception ex)
         {
+            AppDiagnostics.Log("webview_initialization_failed", ex);
             MessageBox.Show(
                 this,
                 "Could not start the technician application:\n\n" + ex.Message,
@@ -640,8 +692,9 @@ internal sealed class TechnicianForm : Form
             else
                 ApplyNativeMessage(root);
         }
-        catch
+        catch (Exception ex)
         {
+            AppDiagnostics.Log("native_bridge_message_failed", ex);
             // Ignore malformed/unknown web messages. The normal web UI remains authoritative.
         }
     }
@@ -680,9 +733,16 @@ internal sealed class TechnicianForm : Form
                 if (!string.IsNullOrWhiteSpace(telemetry))
                     _telemetryText.Text = telemetry;
                 if (!string.IsNullOrWhiteSpace(warning))
+                {
                     _statusText.Text = "H.264 fallback: " + warning;
+                    _statusText.ForeColor = Color.FromArgb(183, 55, 55);
+                    AppDiagnostics.Log("h264_fallback reason=" + warning);
+                }
                 else if (active && !string.IsNullOrWhiteSpace(capture))
+                {
                     _statusText.Text = capture;
+                    _statusText.ForeColor = Color.FromArgb(23, 131, 93);
+                }
 
                 if (active)
                     _ = SyncViewerToolbarAsync();
@@ -796,6 +856,11 @@ internal sealed class TechnicianForm : Form
                 ? status
                 : $"{machine}  ·  {status}";
 
+        _statusText.ForeColor =
+            string.Equals(status, "connected", StringComparison.OrdinalIgnoreCase)
+                ? Color.FromArgb(23, 131, 93)
+                : Color.FromArgb(186, 121, 21);
+
         SetNavHighlight(null);
     }
 
@@ -850,10 +915,89 @@ internal sealed class TechnicianForm : Form
 
         await SyncMonitorSelectorAsync();
         await SyncSelectorAsync(_capture, "captureModeSelect");
-        await SyncSelectorAsync(_video, "videoTransportSelect");
+        await SyncVideoSelectorAsync();
         await SyncSelectorAsync(_resolution, "scaleSelect");
         await SyncSelectorAsync(_quality, "qualitySelect");
         await SyncSelectorAsync(_fps, "fpsSelect");
+    }
+
+    private sealed record BrowserVideoState(
+        bool H264Available,
+        string Value);
+
+    private async Task SyncVideoSelectorAsync()
+    {
+        if (_web.CoreWebView2 is null)
+            return;
+
+        try
+        {
+            var raw = await _web.CoreWebView2.ExecuteScriptAsync(
+                "(()=>{const select=document.getElementById('videoTransportSelect');" +
+                "const h264=document.getElementById('h264TransportOption');" +
+                "if(!select)return '';" +
+                "return JSON.stringify({" +
+                "H264Available:!!h264&&!h264.disabled," +
+                "Value:select.value||'jpeg'" +
+                "});})();");
+
+            var json = JsonSerializer.Deserialize<string>(raw);
+            if (string.IsNullOrWhiteSpace(json))
+                return;
+
+            var state = JsonSerializer.Deserialize<BrowserVideoState>(json);
+            if (state is null)
+                return;
+
+            _video.ComboBox.BeginUpdate();
+            try
+            {
+                var jpeg = _video.Items
+                    .OfType<SelectorChoice>()
+                    .FirstOrDefault(x => x.Value == "jpeg");
+
+                if (jpeg is null)
+                    _video.Items.Insert(0, new SelectorChoice("JPEG", "jpeg"));
+
+                var h264 = _video.Items
+                    .OfType<SelectorChoice>()
+                    .FirstOrDefault(x => x.Value == "h264-annexb");
+
+                if (state.H264Available && h264 is null)
+                    _video.Items.Add(new SelectorChoice("H.264", "h264-annexb"));
+                else if (!state.H264Available && h264 is not null)
+                    _video.Items.Remove(h264);
+
+                var selected = _video.Items
+                    .OfType<SelectorChoice>()
+                    .FirstOrDefault(x =>
+                        string.Equals(
+                            x.Value,
+                            state.Value,
+                            StringComparison.OrdinalIgnoreCase))
+                    ?? _video.Items.OfType<SelectorChoice>()
+                        .First(x => x.Value == "jpeg");
+
+                _video.SelectedItem = selected;
+                _quality.Enabled =
+                    string.Equals(
+                        selected.Value,
+                        "jpeg",
+                        StringComparison.OrdinalIgnoreCase);
+
+                _video.ToolTipText = state.H264Available
+                    ? "H.264 is available for this customer/viewer combination."
+                    : "H.264 is not currently available; JPEG remains active.";
+            }
+            finally
+            {
+                _video.ComboBox.EndUpdate();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppDiagnostics.Log("sync_video_selector_failed", ex);
+        }
     }
 
     private async Task SyncMonitorSelectorAsync()
@@ -1081,6 +1225,19 @@ internal sealed class TechnicianForm : Form
         {
             _statusText.Text = "Action failed: " + ex.Message;
         }
+    }
+
+    private static string CurrentVersion()
+    {
+        var informational =
+            Assembly.GetExecutingAssembly()
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+
+        if (!string.IsNullOrWhiteSpace(informational))
+            return informational.Split('+')[0];
+
+        return Application.ProductVersion;
     }
 
     private static string JsonString(string value) =>
